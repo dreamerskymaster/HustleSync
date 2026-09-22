@@ -80,7 +80,7 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'hustlesync-prod';
 export default function HustleSyncApp() {
   if (!hasFirebaseConfig) {
     return (
-      <div className="min-h-screen bg-stone-100 text-stone-800 flex items-center justify-center p-4">
+      <div className="min-h-[100svh] bg-stone-100 text-stone-800 flex items-center justify-center p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))]">
         <div className="w-full max-w-xl rounded-3xl border border-stone-200 bg-white p-8 shadow-xl">
           <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-stone-900 text-white">
             <Briefcase className="h-7 w-7" />
@@ -162,7 +162,7 @@ export default function HustleSyncApp() {
 
   if (loading) {
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-stone-900 text-white">
+      <div className="flex min-h-[100svh] w-full items-center justify-center bg-stone-900 text-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))]">
         <div className="animate-pulse flex flex-col items-center gap-4">
           <Activity className="animate-bounce w-10 h-10 text-green-400" />
           <p className="font-bold tracking-widest uppercase">Loading HustleSync...</p>
@@ -177,8 +177,8 @@ export default function HustleSyncApp() {
     const consoleLink = 'https://console.firebase.google.com/project/hustlesync-3665b/authentication/providers';
 
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-stone-900 text-white p-4 text-center">
-        <div className="bg-stone-800 p-8 rounded-2xl max-w-md shadow-xl border border-stone-700">
+      <div className="flex min-h-[100svh] w-full items-center justify-center bg-stone-900 text-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))] text-center">
+        <div className="bg-stone-800 p-8 rounded-2xl max-w-md shadow-xl border border-stone-700 w-full">
           <Briefcase className="w-16 h-16 text-red-400 mx-auto mb-4" />
           <h2 className="text-2xl font-bold mb-3">Authentication Required</h2>
           <p className="text-stone-400 text-sm mb-4">
@@ -229,7 +229,7 @@ export default function HustleSyncApp() {
   const currentBusinessJobs = allJobs.filter(j => j.businessType === nav.business);
 
   return (
-    <div className="min-h-screen bg-stone-100 text-stone-800 font-sans">
+    <div className="min-h-[100svh] bg-stone-100 text-stone-800 font-sans pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))]">
       {nav.view === 'home' && (
         <MasterDashboard jobs={allJobs} onNavigate={navigateTo} />
       )}
@@ -281,7 +281,7 @@ function MasterDashboard({ jobs, onNavigate }) {
           </h1>
           <p className="text-stone-500 font-medium mt-1">Master Operations Dashboard</p>
         </div>
-        <div className="bg-stone-900 text-white px-6 py-3 rounded-2xl shadow-lg border-2 border-stone-800 text-center sm:text-right">
+        <div className="bg-stone-900 text-white px-6 py-3 rounded-2xl shadow-lg border-2 border-stone-800 text-center sm:text-right w-full sm:w-auto">
           <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">Total Gross Revenue</p>
           <p className="text-3xl font-black text-green-400">${totalRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
         </div>
@@ -298,7 +298,7 @@ function MasterDashboard({ jobs, onNavigate }) {
             <button 
               key={biz.id}
               onClick={() => onNavigate('dashboard', biz.id)}
-              className={`flex items-center p-5 rounded-2xl border ${biz.border} ${biz.lightBg} hover:shadow-md transition-all text-left group active:scale-[0.98]`}
+              className={`flex items-center p-5 rounded-2xl border ${biz.border} ${biz.lightBg} hover:shadow-md transition-all text-left group active:scale-[0.98] min-h-20`}
             >
               <div className={`${biz.bg} text-white p-4 rounded-xl shadow-sm mr-4 group-hover:scale-110 transition-transform`}>
                 <Icon className="w-8 h-8" />
@@ -479,15 +479,15 @@ function NewJobFormRouter({ businessType, user, onNavigate }) {
 
 function FormLayout({ title, theme, onCancel, err, children }) {
   return (
-    <div className="max-w-2xl mx-auto pb-24 sm:pb-12 bg-stone-50 min-h-screen">
-      <div className={`sticky top-0 z-10 ${theme} text-white px-4 py-4 flex items-center justify-between mb-6 shadow-md`}>
+    <div className="max-w-2xl mx-auto pb-24 sm:pb-12 bg-stone-50 min-h-[100svh]">
+      <div className={`sticky top-0 z-10 ${theme} text-white px-4 py-4 flex items-center justify-between mb-6 shadow-md pt-[calc(1rem+env(safe-area-inset-top))]`}>
         <button onClick={onCancel} className="flex items-center bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg font-bold transition-colors">
           <ArrowLeft className="w-5 h-5 mr-1" /> Cancel
         </button>
         <h2 className="text-xl font-black">{title}</h2>
         <div className="w-20"></div>
       </div>
-      <div className="px-4 space-y-6">
+      <div className="px-4 space-y-6 pb-6">
         {err && <div className="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 rounded-r-lg font-bold shadow-sm">{err}</div>}
         {children}
       </div>
@@ -502,15 +502,15 @@ function CustomerSection({ data, setData }) {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-bold text-stone-700 mb-1">Name *</label>
-          <input type="text" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.customerName} onChange={e => setData({...data, customerName: e.target.value})} />
+          <input type="text" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-12" value={data.customerName} onChange={e => setData({...data, customerName: e.target.value})} />
         </div>
         <div>
           <label className="block text-sm font-bold text-stone-700 mb-1">Address *</label>
-          <input type="text" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.customerAddress} onChange={e => setData({...data, customerAddress: e.target.value})} />
+          <input type="text" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-12" value={data.customerAddress} onChange={e => setData({...data, customerAddress: e.target.value})} />
         </div>
         <div>
           <label className="block text-sm font-bold text-stone-700 mb-1">Phone</label>
-          <input type="tel" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.customerPhone} onChange={e => setData({...data, customerPhone: e.target.value})} />
+          <input type="tel" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-12" value={data.customerPhone} onChange={e => setData({...data, customerPhone: e.target.value})} />
         </div>
       </div>
     </section>
@@ -578,11 +578,11 @@ function FirewoodForm({ user, onCancel, onSave }) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-bold text-stone-700 mb-1">Quantity (Cords)</label>
-            <input type="number" step="0.25" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.woodQuantity} onChange={e => setData({...data, woodQuantity: e.target.value})} />
+            <input type="number" step="0.25" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-12" value={data.woodQuantity} onChange={e => setData({...data, woodQuantity: e.target.value})} />
           </div>
           <div>
             <label className="block text-sm font-bold text-stone-700 mb-1">Size</label>
-            <select className="w-full p-3 bg-white border border-stone-300 rounded-xl" value={data.woodSize} onChange={e => setData({...data, woodSize: e.target.value})}>
+            <select className="w-full p-3 bg-white border border-stone-300 rounded-xl min-h-12" value={data.woodSize} onChange={e => setData({...data, woodSize: e.target.value})}>
               <option>Full Cord</option><option>Face Cord</option><option>1/2 Cord</option><option>1/4 Cord</option>
             </select>
           </div>
@@ -590,7 +590,7 @@ function FirewoodForm({ user, onCancel, onSave }) {
             <label className="block text-sm font-bold text-stone-700 mb-1">Price per Cord</label>
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-stone-400 font-bold">$</span>
-              <input type="number" className="w-full pl-8 p-3 bg-stone-50 border border-stone-300 rounded-xl font-bold text-stone-600" value={data.pricePerCord} onChange={e => setData({...data, pricePerCord: e.target.value})} />
+              <input type="number" className="w-full pl-8 p-3 bg-stone-50 border border-stone-300 rounded-xl font-bold text-stone-600 min-h-12" value={data.pricePerCord} onChange={e => setData({...data, pricePerCord: e.target.value})} />
             </div>
           </div>
         </div>
@@ -653,18 +653,18 @@ function HaulingForm({ user, onCancel, onSave }) {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-bold text-stone-700 mb-1">Load Size</label>
-            <select className="w-full p-3 bg-white border border-stone-300 rounded-xl" value={data.loadSize} onChange={e => setData({...data, loadSize: e.target.value})}>
+            <select className="w-full p-3 bg-white border border-stone-300 rounded-xl min-h-12" value={data.loadSize} onChange={e => setData({...data, loadSize: e.target.value})}>
               <option>Single Item</option><option>1/4 Trailer</option><option>1/2 Trailer</option><option>Full Trailer</option>
             </select>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-bold text-stone-700 mb-1">Base Rate / Labor</label>
-              <input type="number" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.basePrice} onChange={e => setData({...data, basePrice: e.target.value})} />
+              <input type="number" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-12" value={data.basePrice} onChange={e => setData({...data, basePrice: e.target.value})} />
             </div>
             <div>
               <label className="block text-sm font-bold text-stone-700 mb-1">Dump/Recycling Fees</label>
-              <input type="number" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl text-red-700 font-bold" value={data.dumpFee} onChange={e => setData({...data, dumpFee: e.target.value})} />
+              <input type="number" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl text-red-700 font-bold min-h-12" value={data.dumpFee} onChange={e => setData({...data, dumpFee: e.target.value})} />
             </div>
           </div>
         </div>
@@ -720,24 +720,24 @@ function TradeForm({ tradeType, user, onCancel, onSave }) {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-bold text-stone-700 mb-1">System / Area</label>
-            <input type="text" placeholder={isPlumbing ? "e.g. Kitchen Sink" : "e.g. Rheem Heat Pump"} className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.systemType} onChange={e => setData({...data, systemType: e.target.value})} />
+            <input type="text" placeholder={isPlumbing ? "e.g. Kitchen Sink" : "e.g. Rheem Heat Pump"} className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-12" value={data.systemType} onChange={e => setData({...data, systemType: e.target.value})} />
           </div>
           <div>
             <label className="block text-sm font-bold text-stone-700 mb-1">Issue / Work Performed</label>
-            <textarea rows="2" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.diagnosis} onChange={e => setData({...data, diagnosis: e.target.value})} />
+            <textarea rows="2" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-24" value={data.diagnosis} onChange={e => setData({...data, diagnosis: e.target.value})} />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-t pt-4">
             <div>
               <label className="block text-sm font-bold text-stone-700 mb-1">Parts Cost</label>
-              <input type="number" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.partsCost} onChange={e => setData({...data, partsCost: e.target.value})} />
+              <input type="number" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-12" value={data.partsCost} onChange={e => setData({...data, partsCost: e.target.value})} />
             </div>
             <div>
               <label className="block text-sm font-bold text-stone-700 mb-1">Labor (Hours)</label>
-              <input type="number" step="0.5" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl" value={data.laborHours} onChange={e => setData({...data, laborHours: e.target.value})} />
+              <input type="number" step="0.5" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl min-h-12" value={data.laborHours} onChange={e => setData({...data, laborHours: e.target.value})} />
             </div>
             <div>
               <label className="block text-sm font-bold text-stone-700 mb-1">Hourly Rate</label>
-              <input type="number" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl font-bold" value={data.hourlyRate} onChange={e => setData({...data, hourlyRate: e.target.value})} />
+              <input type="number" className="w-full p-3 bg-stone-50 border border-stone-300 rounded-xl font-bold min-h-12" value={data.hourlyRate} onChange={e => setData({...data, hourlyRate: e.target.value})} />
             </div>
           </div>
         </div>
@@ -786,7 +786,7 @@ function UniversalInvoiceView({ job, onClose }) {
   };
 
   return (
-    <div className="min-h-screen bg-stone-100 p-4 sm:p-12">
+    <div className="min-h-[100svh] bg-stone-100 p-4 sm:p-12 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))]">
       <div className="max-w-2xl mx-auto print:w-full print:max-w-none print:p-0">
         <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4 print:hidden">
           <button onClick={onClose} className="w-full sm:w-auto flex justify-center items-center text-stone-600 bg-white border border-stone-300 px-4 py-2 rounded-lg font-bold transition-colors hover:bg-stone-50">
