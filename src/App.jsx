@@ -2,6 +2,10 @@
 // The app is kept in this file and re-exported from src/App.jsx for Vite.
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
+import { Device } from '@capacitor/device';
+import { PushNotifications } from '@capacitor/push-notifications';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth,
@@ -264,6 +268,50 @@ export default function HustleSyncApp() {
 function MasterDashboard({ jobs, onNavigate }) {
   const totalRevenue = jobs.reduce((sum, job) => sum + (job.totalPrice || 0), 0);
   const recentJobs = jobs.slice(0, 5);
+  const [deviceInfo, setDeviceInfo] = useState(null);
+  const [pushStatus, setPushStatus] = useState('Web-ready');
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      setPushStatus('Web-ready');
+      return;
+    }
+
+    let cancelled = false;
+
+    Device.getInfo()
+      .then((info) => {
+        if (!cancelled) setDeviceInfo(info);
+      })
+      .catch(() => {});
+
+    PushNotifications.requestPermissions()
+      .then((permission) => {
+        if (!cancelled) {
+          setPushStatus(permission.receive === 'granted' ? 'Notifications enabled' : 'Permission pending');
+        }
+        if (permission.receive === 'granted') {
+          PushNotifications.register();
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPushStatus('Unavailable');
+      });
+
+    const registrationListener = PushNotifications.addListener('registration', (token) => {
+      if (!cancelled) setPushStatus(`Token ready · ${token.value.slice(-8)}`);
+    });
+
+    const notificationListener = PushNotifications.addListener('pushNotificationReceived', () => {
+      if (!cancelled) setPushStatus('New push received');
+    });
+
+    return () => {
+      cancelled = true;
+      registrationListener?.remove();
+      notificationListener?.remove();
+    };
+  }, []);
 
   const businesses = [
     { id: 'firewood', name: 'Timber', icon: Flame, color: 'text-amber-500', bg: 'bg-amber-500', lightBg: 'bg-amber-50', border: 'border-amber-200' },
@@ -273,21 +321,67 @@ function MasterDashboard({ jobs, onNavigate }) {
   ];
 
   return (
-    <div className="max-w-4xl mx-auto p-4 sm:p-6 pb-24">
-      <header className="mb-8 mt-4 text-center sm:text-left flex flex-col sm:flex-row justify-between items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-black tracking-tight flex items-center justify-center sm:justify-start gap-2 text-stone-900">
-            <Briefcase className="w-8 h-8 text-green-600" /> HustleSync
-          </h1>
-          <p className="text-stone-500 font-medium mt-1">Master Operations Dashboard</p>
-        </div>
-        <div className="bg-stone-900 text-white px-6 py-3 rounded-2xl shadow-lg border-2 border-stone-800 text-center sm:text-right w-full sm:w-auto">
-          <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">Total Gross Revenue</p>
-          <p className="text-3xl font-black text-green-400">${totalRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+    <div className="max-w-5xl mx-auto p-4 sm:p-6 pb-24">
+      <header className="mb-6 mt-2">
+        <div className="overflow-hidden rounded-[28px] bg-gradient-to-br from-slate-900 via-slate-800 to-blue-900 p-5 sm:p-6 text-white shadow-[0_30px_80px_-30px_rgba(15,23,42,0.9)]">
+          <div className="flex flex-col gap-5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur-sm">
+                  <Briefcase className="h-6 w-6 text-green-300" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-300">Operations Suite</p>
+                  <h1 className="text-2xl font-black tracking-tight sm:text-3xl">HustleSync</h1>
+                </div>
+              </div>
+              <div className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-200">
+                {Capacitor.isNativePlatform() ? 'Native Ready' : 'Web Ready'}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <div className="max-w-xl">
+                <p className="text-sm font-medium text-slate-300">Professional job management for field teams</p>
+                <h2 className="mt-2 text-3xl font-black tracking-tight sm:text-[2.4rem] leading-none">
+                  Run every quote, job, and invoice from one mobile-first workspace.
+                </h2>
+              </div>
+
+              <div className="rounded-2xl bg-white/8 p-4 ring-1 ring-white/10 backdrop-blur-sm min-w-[180px]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-300">Gross revenue</p>
+                <p className="mt-2 text-3xl font-black text-green-300">${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <button onClick={() => onNavigate('home')} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition hover:bg-white/10 active:scale-[0.99]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-300">Jobs</p>
+                <p className="mt-2 text-2xl font-black">{jobs.length}</p>
+              </button>
+              <button onClick={() => onNavigate('home')} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition hover:bg-white/10 active:scale-[0.99]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-300">Active profile</p>
+                <p className="mt-2 text-lg font-bold">{deviceInfo ? `${deviceInfo.platform}` : 'Mobile-ready'}</p>
+              </button>
+              <button onClick={() => onNavigate('home')} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition hover:bg-white/10 active:scale-[0.99]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-300">Push</p>
+                <p className="mt-2 text-sm font-bold text-emerald-200">{pushStatus}</p>
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
-      <h2 className="text-lg font-bold text-stone-800 mb-4 px-1">Your Businesses</h2>
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <h2 className="text-xl font-black text-stone-900">Business lines</h2>
+        <button
+          onClick={() => onNavigate('home')}
+          className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-bold text-stone-700 shadow-sm transition hover:border-stone-300 hover:bg-stone-50"
+        >
+          Overview
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-10">
         {businesses.map(biz => {
           const bizJobs = jobs.filter(j => j.businessType === biz.id);
@@ -315,7 +409,11 @@ function MasterDashboard({ jobs, onNavigate }) {
         })}
       </div>
 
-      <h2 className="text-lg font-bold text-stone-800 mb-4 px-1">Recent Activity</h2>
+      <div className="mb-4 flex items-center justify-between gap-3 px-1">
+        <h2 className="text-xl font-black text-stone-900">Recent activity</h2>
+        <span className="text-sm font-semibold text-stone-500">Last 5 jobs</span>
+      </div>
+
       <div className="bg-white rounded-2xl shadow-sm border border-stone-200 overflow-hidden">
         {recentJobs.length === 0 ? (
           <div className="p-8 text-center text-stone-500 font-medium">No recent jobs found. Select a business to start.</div>
