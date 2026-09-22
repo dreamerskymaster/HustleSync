@@ -58,6 +58,69 @@ const hasFirebaseConfig = Boolean(
   firebaseConfig?.appId
 );
 
+const LOCAL_STORAGE_KEY = 'hustlesync-demo-jobs-v1';
+
+const readLocalJobs = () => {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn('Could not read local job cache:', error);
+    return [];
+  }
+};
+
+const writeLocalJobs = (jobs) => {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(jobs));
+  } catch (error) {
+    console.warn('Could not save local job cache:', error);
+  }
+};
+
+const saveLocalJob = (payload) => {
+  const current = readLocalJobs();
+  const id = payload.id || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `local-${Date.now()}`);
+  const next = [{ ...payload, id, createdAt: payload.createdAt || Date.now() }, ...current].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  writeLocalJobs(next);
+  return { id, ...payload, createdAt: payload.createdAt || Date.now() };
+};
+
+const deleteLocalJob = (jobId) => {
+  const next = readLocalJobs().filter(job => job.id !== jobId);
+  writeLocalJobs(next);
+};
+
+const persistJob = async (payload, userId) => {
+  if (!db || !userId) {
+    return saveLocalJob(payload);
+  }
+
+  try {
+    const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', userId, 'jobs'), payload);
+    return { id: docRef.id, ...payload };
+  } catch (error) {
+    console.warn('Firestore save failed, using local demo storage instead:', error);
+    return saveLocalJob(payload);
+  }
+};
+
+const removePersistedJob = async (jobId, userId) => {
+  if (!db || !userId) {
+    deleteLocalJob(jobId);
+    return;
+  }
+
+  try {
+    const docRef = doc(db, 'artifacts', appId, 'users', userId, 'jobs', jobId);
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.warn('Firestore delete failed, removing from local demo storage instead:', error);
+    deleteLocalJob(jobId);
+  }
+};
+
 let app = null;
 let auth = null;
 let db = null;
@@ -80,6 +143,24 @@ if (hasFirebaseConfig) {
 
 // Use sandbox appId if available, otherwise default for production
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'hustlesync-prod';
+
+const describeSaveError = (error) => {
+  const message = error?.message || error?.code || '';
+
+  if (/ERR_BLOCKED_BY_CLIENT|blocked by client|firestore.googleapis/i.test(message)) {
+    return 'Firestore is being blocked by your browser, extension, or network policy. Disable ad blockers/privacy filters and allow firestore.googleapis.com, then try again.';
+  }
+
+  if (/permission|permissions/i.test(message)) {
+    return 'The app does not have Firebase write access yet. Check Firestore rules and ensure Anonymous Authentication is enabled.';
+  }
+
+  if (/network|fetch/i.test(message)) {
+    return 'The network request failed. Please check your internet connection and try again.';
+  }
+
+  return 'Save failed. Check your Firebase Firestore access and try again.';
+};
 
 export default function HustleSyncApp() {
   if (!hasFirebaseConfig) {
@@ -112,6 +193,8 @@ export default function HustleSyncApp() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(null);
+  const [firestoreIssue, setFirestoreIssue] = useState(null);
+  const [localDemoMode, setLocalDemoMode] = useState(!hasFirebaseConfig || !db);
   
   // Navigation State: { view: 'home' | 'dashboard' | 'new_order' | 'invoice', business: string, job: object }
   const [nav, setNav] = useState({ view: 'home', business: null, job: null });
@@ -122,6 +205,13 @@ export default function HustleSyncApp() {
     const initAuth = async () => {
       try {
         setAuthError(null);
+
+        if (!auth) {
+          setUser({ uid: 'local-demo-user' });
+          setLoading(false);
+          return;
+        }
+
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else {
@@ -130,15 +220,25 @@ export default function HustleSyncApp() {
       } catch (error) {
         console.error("Auth error:", error);
         setAuthError(error);
-        // Even on error, stop loading so the user sees something (or handle error gracefully)
+        setUser({ uid: 'local-demo-user' });
+        setLocalDemoMode(true);
         setLoading(false);
       }
     };
+
+    if (!auth) {
+      setUser({ uid: 'local-demo-user' });
+      setLoading(false);
+      return;
+    }
+
     initAuth();
 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) setLoading(false);
+      if (currentUser) {
+        setUser(currentUser);
+        setLoading(false);
+      }
     });
 
     return () => unsubscribe();
@@ -146,8 +246,22 @@ export default function HustleSyncApp() {
 
   // Fetch All Jobs across all businesses
   useEffect(() => {
-    if (!user || !user.uid) return;
+    if (!user || !user.uid) {
+      setAllJobs([]);
+      return;
+    }
 
+    if (!db) {
+      const localJobs = readLocalJobs();
+      localJobs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      setAllJobs(localJobs);
+      setFirestoreIssue('Running in local demo mode. Firebase is unavailable, so jobs are stored in your browser for testing.');
+      setLocalDemoMode(true);
+      return;
+    }
+
+    setFirestoreIssue(null);
+    setLocalDemoMode(false);
     const jobsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'jobs');
     
     const unsubscribe = onSnapshot(jobsRef, 
@@ -157,8 +271,21 @@ export default function HustleSyncApp() {
         }));
         fetchedJobs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         setAllJobs(fetchedJobs);
+        setFirestoreIssue(null);
       },
-      (error) => console.error("Error fetching jobs:", error)
+      (error) => {
+        console.error("Error fetching jobs:", error);
+        const message = error?.message || 'FireStore access failed.';
+        const isBlocked = /ERR_BLOCKED_BY_CLIENT|AbortError|firestore.googleapis|blocked by client/i.test(message);
+        const localJobs = readLocalJobs();
+        setAllJobs(localJobs);
+        setLocalDemoMode(true);
+        setFirestoreIssue(
+          isBlocked
+            ? 'Firestore is blocked by a browser extension or network policy. Local demo mode is active for testing in this browser.'
+            : 'Could not sync job data. Showing local demo data until the live backend is available.'
+        );
+      }
     );
 
     return () => unsubscribe();
@@ -234,6 +361,20 @@ export default function HustleSyncApp() {
 
   return (
     <div className="min-h-[100svh] bg-stone-100 text-stone-800 font-sans pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))]">
+      {firestoreIssue && (
+        <div className="mx-auto max-w-4xl px-4 pt-4">
+          <div className={`rounded-2xl border p-4 text-sm shadow-sm ${localDemoMode ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`mt-0.5 rounded-full p-1 ${localDemoMode ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-200 text-amber-900'}`}>{localDemoMode ? '✓' : '!'}</div>
+              <div>
+                <p className="font-black">{localDemoMode ? 'Demo mode active' : 'Data connection warning'}</p>
+                <p className="mt-1">{firestoreIssue}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {nav.view === 'home' && (
         <MasterDashboard jobs={allJobs} onNavigate={navigateTo} />
       )}
@@ -464,8 +605,7 @@ function BusinessDashboard({ businessType, jobs, userId, onNavigate }) {
     // Assuming standard confirm is blocked, we should technically build a modal. 
     // For this exact implementation, we'll proceed directly but normally would use a custom modal state.
     try {
-        const docRef = doc(db, 'artifacts', appId, 'users', userId, 'jobs', orderId);
-        await deleteDoc(docRef);
+        await removePersistedJob(orderId, userId);
     } catch (e) {
         console.error("Error deleting job:", e);
     }
@@ -662,8 +802,10 @@ function FirewoodForm({ user, onCancel, onSave }) {
         deliveryPrice: !data.isStacked ? parseFloat(data.deliveryPrice) : 0,
         totalPrice, createdAt: Date.now()
       };
-      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jobs'), payload);
-      onSave();
+      const saved = await persistJob(payload, user.uid);
+      if (saved) {
+        onSave();
+      }
     } catch (e) { setErr("Failed to save."); setSaving(false); }
   };
 
@@ -737,8 +879,10 @@ function HaulingForm({ user, onCancel, onSave }) {
         basePrice: parseFloat(data.basePrice), dumpFee: parseFloat(data.dumpFee),
         totalPrice, createdAt: Date.now()
       };
-      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jobs'), payload);
-      onSave();
+      const saved = await persistJob(payload, user.uid);
+      if (saved) {
+        onSave();
+      }
     } catch (e) { setErr("Failed to save."); setSaving(false); }
   };
 
@@ -804,8 +948,10 @@ function TradeForm({ tradeType, user, onCancel, onSave }) {
         partsCost: totalParts, laborHours: parseFloat(data.laborHours), hourlyRate: parseFloat(data.hourlyRate),
         totalPrice, createdAt: Date.now()
       };
-      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jobs'), payload);
-      onSave();
+      const saved = await persistJob(payload, user.uid);
+      if (saved) {
+        onSave();
+      }
     } catch (e) { setErr("Failed to save."); setSaving(false); }
   };
 
