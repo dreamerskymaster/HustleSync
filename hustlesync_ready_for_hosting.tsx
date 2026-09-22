@@ -173,6 +173,8 @@ export default function HustleSyncApp() {
 
   if (!user) {
     const errorCode = authError?.code || authError?.message || 'Unknown auth error';
+    const isConfigMissing = String(errorCode).includes('auth/configuration-not-found');
+    const consoleLink = 'https://console.firebase.google.com/project/hustlesync-3665b/authentication/providers';
 
     return (
       <div className="flex h-screen w-full items-center justify-center bg-stone-900 text-white p-4 text-center">
@@ -180,7 +182,9 @@ export default function HustleSyncApp() {
           <Briefcase className="w-16 h-16 text-red-400 mx-auto mb-4" />
           <h2 className="text-2xl font-bold mb-3">Authentication Required</h2>
           <p className="text-stone-400 text-sm mb-4">
-            Please check your Firebase configuration and make sure Anonymous Authentication is enabled in the Firebase Console.
+            {isConfigMissing
+              ? 'Anonymous Authentication is likely disabled or not configured for this Firebase project. Enable the Anonymous provider in the Firebase Console.'
+              : 'Please check your Firebase configuration and make sure Anonymous Authentication is enabled in the Firebase Console.'}
           </p>
           <div className="bg-stone-900 p-4 rounded-lg text-left overflow-auto text-xs text-stone-500 font-mono mb-4">
             {errorCode}
@@ -202,6 +206,16 @@ export default function HustleSyncApp() {
               Reload App
             </button>
           </div>
+          {isConfigMissing && (
+            <a
+              href={consoleLink}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-4 inline-flex text-sm font-bold text-red-300 hover:text-red-200 underline underline-offset-4"
+            >
+              Open Firebase Authentication settings
+            </a>
+          )}
         </div>
       </div>
     );
