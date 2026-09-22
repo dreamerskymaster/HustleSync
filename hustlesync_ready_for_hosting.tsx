@@ -107,6 +107,7 @@ export default function HustleSyncApp() {
 
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
   
   // Navigation State: { view: 'home' | 'dashboard' | 'new_order' | 'invoice', business: string, job: object }
   const [nav, setNav] = useState({ view: 'home', business: null, job: null });
@@ -116,6 +117,7 @@ export default function HustleSyncApp() {
   useEffect(() => {
     const initAuth = async () => {
       try {
+        setAuthError(null);
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else {
@@ -123,6 +125,7 @@ export default function HustleSyncApp() {
         }
       } catch (error) {
         console.error("Auth error:", error);
+        setAuthError(error);
         // Even on error, stop loading so the user sees something (or handle error gracefully)
         setLoading(false);
       }
@@ -169,14 +172,35 @@ export default function HustleSyncApp() {
   }
 
   if (!user) {
+    const errorCode = authError?.code || authError?.message || 'Unknown auth error';
+
     return (
       <div className="flex h-screen w-full items-center justify-center bg-stone-900 text-white p-4 text-center">
         <div className="bg-stone-800 p-8 rounded-2xl max-w-md shadow-xl border border-stone-700">
           <Briefcase className="w-16 h-16 text-red-400 mx-auto mb-4" />
           <h2 className="text-2xl font-bold mb-3">Authentication Required</h2>
-          <p className="text-stone-400 text-sm mb-6">Please check your Firebase configuration and ensure Anonymous Authentication is enabled in the Firebase Console.</p>
-          <div className="bg-stone-900 p-4 rounded-lg text-left overflow-auto text-xs text-stone-500 font-mono">
-            Check your .env files or Firebase initialization settings.
+          <p className="text-stone-400 text-sm mb-4">
+            Please check your Firebase configuration and make sure Anonymous Authentication is enabled in the Firebase Console.
+          </p>
+          <div className="bg-stone-900 p-4 rounded-lg text-left overflow-auto text-xs text-stone-500 font-mono mb-4">
+            {errorCode}
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <button
+              onClick={() => window.location.reload()}
+              className="bg-red-500 hover:bg-red-400 text-white px-4 py-2 rounded-lg font-bold transition-colors"
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => {
+                console.log('Firebase auth config', firebaseConfig);
+                window.location.reload();
+              }}
+              className="bg-stone-700 hover:bg-stone-600 text-white px-4 py-2 rounded-lg font-bold transition-colors"
+            >
+              Reload App
+            </button>
           </div>
         </div>
       </div>
