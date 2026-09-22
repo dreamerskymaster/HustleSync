@@ -13,8 +13,7 @@ HustleSync is a Vite + React web app for managing service jobs, invoices, and Fi
 
 - `index.html` - Vite entry HTML
 - `src/main.jsx` - React bootstrap entry point
-- `src/App.jsx` - App export used by Vite
-- `hustlesync_ready_for_hosting.tsx` - Main app implementation source
+- `src/App.jsx` - Main HustleSync app source
 - `src/index.css` - Tailwind entry styles and print rules
 - `firebase.json` - Firebase Hosting config
 - `.firebaserc` - Firebase project binding

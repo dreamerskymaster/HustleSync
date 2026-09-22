@@ -9,8 +9,7 @@
 
 ## Working notes
 
-- `src/App.jsx` is the Vite import target.
-- `hustlesync_ready_for_hosting.tsx` contains the main app source.
+- `src/App.jsx` contains the main app source.
 - Firebase Hosting is configured to serve `dist/`.
 
 ## Useful commands
