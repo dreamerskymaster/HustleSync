@@ -721,7 +721,10 @@ export default function HustleSyncApp() {
 }
 
 function MasterDashboard({ jobs, onNavigate, theme, onToggleTheme }) {
-  const totalRevenue = jobs.reduce((sum, job) => sum + (job.totalPrice || 0), 0);
+  // Match the trade boards: earned money and scheduled money are different
+  // things, so the headline figure must not quietly add them together.
+  const earned = jobs.filter(job => !isOpenOrder(job)).reduce((sum, job) => sum + (job.totalPrice || 0), 0);
+  const scheduled = jobs.filter(isOpenOrder).reduce((sum, job) => sum + (job.totalPrice || 0), 0);
   const recentJobs = jobs.slice(0, 5);
   const [deviceInfo, setDeviceInfo] = useState(null);
   const [pushStatus, setPushStatus] = useState('Web-ready');
@@ -796,12 +799,13 @@ function MasterDashboard({ jobs, onNavigate, theme, onToggleTheme }) {
 
         {/* The money is the one loud thing on this screen. */}
         <div className="rounded-2xl bg-panel px-6 py-7 text-on-panel">
-          <p className="text-base font-medium text-on-panel/60">Booked across all four trades</p>
+          <p className="text-base font-medium text-on-panel/60">Earned across all four trades</p>
           <p className="mt-1 font-display text-6xl font-bold leading-none tabular sm:text-7xl">
-            ${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            ${earned.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <p className="mt-3 text-base font-medium text-on-panel/60">
             {jobs.length === 1 ? '1 job logged' : `${jobs.length} jobs logged`}
+            {scheduled > 0 && `, plus $${scheduled.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} scheduled`}
           </p>
         </div>
       </header>
@@ -828,7 +832,7 @@ function MasterDashboard({ jobs, onNavigate, theme, onToggleTheme }) {
                 <p className="text-sm font-medium text-ash">{bizJobs.length === 1 ? '1 job' : `${bizJobs.length} jobs`}</p>
               </div>
               {/* A zero is not worth accenting; only real money gets the trade colour. */}
-              <p className={`font-display text-2xl font-semibold tabular ${bizRev > 0 ? biz.color : 'text-ash'}`}>${bizRev.toLocaleString()}</p>
+              <p className={`font-display text-2xl font-semibold tabular ${bizRev > 0 ? biz.color : 'text-ash'}`}>${bizRev.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             </button>
           )
         })}
