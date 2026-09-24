@@ -120,3 +120,9 @@ create or replace view public.open_orders as
   from public.jobs
   where status = 'open'
   order by delivery_date nulls last, created_at;
+
+-- Views do NOT enforce the underlying table's row level security by default:
+-- they run as the view owner, so every user would see everyone's totals.
+-- security_invoker makes them run as the caller, which is the whole point.
+alter view public.job_totals_by_trade set (security_invoker = on);
+alter view public.open_orders set (security_invoker = on);

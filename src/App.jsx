@@ -57,10 +57,12 @@ const JOB_FIELDS = [
   ['systemType', 'system_type'], ['diagnosis', 'diagnosis'],
   ['partsCost', 'parts_cost'], ['laborHours', 'labor_hours'],
   ['hourlyRate', 'hourly_rate'],
-  ['completedAt', 'completed_at'], ['paidAt', 'paid_at']
+  ['completedAt', 'completed_at'], ['paidAt', 'paid_at'],
+  ['invoiceNumber', 'invoice_number'], ['taxRate', 'tax_rate']
 ];
 
 const NUMERIC_FIELDS = new Set([
+  'invoiceNumber', 'taxRate',
   'totalPrice', 'woodQuantity', 'pricePerCord', 'stackingPrice',
   'basePrice', 'dumpFee', 'partsCost', 'laborHours', 'hourlyRate'
 ]);
@@ -197,6 +199,123 @@ const withTimeout = (promise, ms, label) => {
 // A job booked for a future date is still Open. Anything else was done on the
 // spot, which is how plumbing, HVAC and hauling are normally logged: standing
 // there having just finished it.
+// --- Offline support -------------------------------------------------------
+// This app is used in driveways with one bar of signal. A save that fails
+// because the van moved behind a hill must not lose the job. Writes made
+// offline go into an outbox in local storage, are applied to a cached copy of
+// the list so the screen stays truthful, and replay in order on reconnect.
+
+const OUTBOX_KEY = 'hustlesync-outbox-v1';
+const JOBS_CACHE_KEY = 'hustlesync-jobs-cache-v1';
+
+const readJson = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (error) {
+    return fallback;
+  }
+};
+
+const writeJson = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    // Storage full or blocked. The queue is a convenience, not a guarantee.
+  }
+};
+
+const cacheListeners = new Set();
+const subscribeCache = (listener) => {
+  cacheListeners.add(listener);
+  return () => cacheListeners.delete(listener);
+};
+const publishCache = () => {
+  const jobs = readJson(JOBS_CACHE_KEY, []);
+  const pending = readJson(OUTBOX_KEY, []).length;
+  cacheListeners.forEach(listener => listener(jobs, pending));
+};
+
+const cacheJobs = (jobs) => {
+  writeJson(JOBS_CACHE_KEY, jobs);
+  publishCache();
+};
+
+const pendingCount = () => readJson(OUTBOX_KEY, []).length;
+
+const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
+
+// A refused request is a real error and must surface. A request that never
+// reached the server is worth retrying later.
+const isNetworkFailure = (error) => {
+  if (isOffline()) return true;
+  const message = String((error && error.message) || '');
+  return /failed to fetch|networkerror|network request failed|timed out|load failed/i.test(message);
+};
+
+const queueChange = (change) => {
+  const outbox = readJson(OUTBOX_KEY, []);
+  outbox.push({ ...change, queuedAt: Date.now() });
+  writeJson(OUTBOX_KEY, outbox);
+};
+
+// Mirror the change onto the cached list so the screen matches what the user
+// just did, even though the server has not heard about it yet.
+const applyToCache = (change) => {
+  const jobs = readJson(JOBS_CACHE_KEY, []);
+  let next = jobs;
+  if (change.type === 'insert') {
+    next = [{ ...change.payload, id: change.localId, pendingSync: true }, ...jobs];
+  } else if (change.type === 'update') {
+    next = jobs.map(job => (job.id === change.jobId ? { ...job, ...change.fields, pendingSync: true } : job));
+  } else if (change.type === 'delete') {
+    next = jobs.filter(job => job.id !== change.jobId);
+  }
+  next.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  cacheJobs(next);
+};
+
+let flushing = false;
+
+const flushOutbox = async (userId) => {
+  if (flushing || !usePostgres || !userId) return;
+  const outbox = readJson(OUTBOX_KEY, []);
+  if (!outbox.length) return;
+  flushing = true;
+  try {
+    const remaining = [...outbox];
+    while (remaining.length) {
+      const change = remaining[0];
+      try {
+        if (change.type === 'insert') {
+          const { error } = await supabase.from('jobs').insert(jobToRow(change.payload, userId));
+          if (error) throw error;
+        } else if (change.type === 'update') {
+          // A row that only ever existed offline has no server id yet; its
+          // insert is still queued ahead of this, so skip rather than fail.
+          if (String(change.jobId).startsWith('pending-')) { remaining.shift(); continue; }
+          await updateJobFields(change.jobId, userId, change.fields, true);
+        } else if (change.type === 'delete') {
+          if (!String(change.jobId).startsWith('pending-')) {
+            const { error } = await supabase.from('jobs').delete().eq('id', change.jobId).eq('user_id', userId);
+            if (error) throw error;
+          }
+        }
+        remaining.shift();
+        writeJson(OUTBOX_KEY, remaining);
+      } catch (error) {
+        if (isNetworkFailure(error)) break;      // still offline, try again later
+        console.error('Dropping unsendable queued change:', change, error);
+        remaining.shift();                        // rejected outright, retrying will not help
+        writeJson(OUTBOX_KEY, remaining);
+      }
+    }
+  } finally {
+    flushing = false;
+    publishCache();
+  }
+};
+
 const initialCompletion = (payload) => {
   const scheduled = payload.deliveryDate
     ? Date.parse(`${payload.deliveryDate}T23:59:59`)
@@ -231,8 +350,16 @@ const submitJob = async (payload, userId, existingJob) => {
   return persistJob(payload, userId);
 };
 
-const updateJobFields = async (jobId, userId, fields) => {
+const updateJobFields = async (jobId, userId, fields, direct = false) => {
   if (usePostgres && userId) {
+    const queueIt = () => {
+      const change = { type: 'update', jobId, fields };
+      queueChange(change);
+      applyToCache(change);
+    };
+    // `direct` is set when replaying the outbox, so a retry cannot re-queue
+    // itself and spin forever.
+    if (!direct && isOffline()) return queueIt();
     // Send only the columns that changed, mapped to snake_case.
     const row = {};
     for (const [key, column] of JOB_FIELDS) {
@@ -241,8 +368,13 @@ const updateJobFields = async (jobId, userId, fields) => {
         row[column] = value === undefined || value === '' ? null : value;
       }
     }
-    const { error } = await supabase.from('jobs').update(row).eq('id', jobId).eq('user_id', userId);
-    if (error) throw error;
+    try {
+      const { error } = await supabase.from('jobs').update(row).eq('id', jobId).eq('user_id', userId);
+      if (error) throw error;
+    } catch (error) {
+      if (!direct && isNetworkFailure(error)) return queueIt();
+      throw error;
+    }
     return;
   }
   if (!db || !userId) {
@@ -258,13 +390,26 @@ const persistJob = async (rawPayload, userId) => {
   const payload = { ...rawPayload, ...initialCompletion(rawPayload) };
 
   if (usePostgres && userId) {
-    const { data, error } = await supabase
-      .from('jobs')
-      .insert(jobToRow(payload, userId))
-      .select()
-      .single();
-    if (error) throw error;
-    return rowToJob(data);
+    const localId = `pending-${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now()}`;
+    const queueIt = () => {
+      const change = { type: 'insert', payload, localId };
+      queueChange(change);
+      applyToCache(change);
+      return { id: localId, ...payload, pendingSync: true };
+    };
+    if (isOffline()) return queueIt();
+    try {
+      const { data, error } = await supabase
+        .from('jobs')
+        .insert(jobToRow(payload, userId))
+        .select()
+        .single();
+      if (error) throw error;
+      return rowToJob(data);
+    } catch (error) {
+      if (isNetworkFailure(error)) return queueIt();
+      throw error;
+    }
   }
 
   // Only used when the app has no backend configured at all (true demo mode).
@@ -284,8 +429,19 @@ const persistJob = async (rawPayload, userId) => {
 
 const removePersistedJob = async (jobId, userId) => {
   if (usePostgres && userId) {
-    const { error } = await supabase.from('jobs').delete().eq('id', jobId).eq('user_id', userId);
-    if (error) throw error;
+    const queueIt = () => {
+      const change = { type: 'delete', jobId };
+      queueChange(change);
+      applyToCache(change);
+    };
+    if (isOffline()) return queueIt();
+    try {
+      const { error } = await supabase.from('jobs').delete().eq('id', jobId).eq('user_id', userId);
+      if (error) throw error;
+    } catch (error) {
+      if (isNetworkFailure(error)) return queueIt();
+      throw error;
+    }
     return;
   }
   if (!db || !userId) {
@@ -428,6 +584,22 @@ export default function HustleSyncApp() {
   }, [theme]);
 
   const toggleTheme = () => setTheme(current => (current === 'dark' ? 'light' : 'dark'));
+
+  const [queued, setQueued] = useState(() => pendingCount());
+  const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
+
+  useEffect(() => {
+    const unsubscribe = subscribeCache((_jobs, waiting) => setQueued(waiting));
+    const goOnline = () => { setOnline(true); setQueued(pendingCount()); };
+    const goOffline = () => setOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      unsubscribe();
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
   
   // Navigation State: { view: 'home' | 'dashboard' | 'new_order' | 'invoice', business: string, job: object }
   const [nav, setNav] = useState({ view: 'home', business: null, job: null });
@@ -524,16 +696,34 @@ export default function HustleSyncApp() {
       let active = true;
       const load = async () => {
         try {
+          await flushOutbox(user.uid);
           const rows = await fetchPostgresJobs(user.uid);
           if (!active) return;
+          cacheJobs(rows);
           setAllJobs(rows);
           setLocalDemoMode(false);
           setFirestoreIssue(null);
         } catch (error) {
           console.error('Could not load jobs:', error);
-          if (active) setFirestoreIssue(describeSaveError(error));
+          if (!active) return;
+          // Fall back to the last known list rather than an empty screen.
+          const cached = readJson(JOBS_CACHE_KEY, []);
+          if (cached.length) setAllJobs(cached);
+          setFirestoreIssue(
+            isNetworkFailure(error)
+              ? 'Offline. Showing the last synced list; changes are saved on this device and will upload when you reconnect.'
+              : describeSaveError(error)
+          );
         }
       };
+
+      // Local edits made while offline must repaint immediately.
+      const unsubscribeCache = subscribeCache((jobs) => {
+        if (active) setAllJobs([...jobs].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+      });
+
+      const onOnline = () => load();
+      window.addEventListener('online', onOnline);
 
       load();
 
@@ -550,6 +740,8 @@ export default function HustleSyncApp() {
 
       return () => {
         active = false;
+        unsubscribeCache();
+        window.removeEventListener('online', onOnline);
         supabase.removeChannel(channel);
       };
     }
@@ -666,6 +858,22 @@ export default function HustleSyncApp() {
 
   return (
     <div className="min-h-[100svh] bg-paper text-ink font-sans pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))]">
+      {(!online || queued > 0) && (
+        <div className="mx-auto max-w-4xl px-4 pt-4">
+          <div className="flex items-start gap-3 rounded-2xl border border-hazard/40 bg-hazard/10 p-4 text-sm text-ember shadow-sm">
+            <div className="mt-0.5 rounded-full bg-hazard/25 p-1 text-ember"><Activity className="h-4 w-4" /></div>
+            <div>
+              <p className="font-bold">{online ? 'Catching up' : 'Working offline'}</p>
+              <p className="mt-1">
+                {queued > 0
+                  ? `${queued === 1 ? '1 change is' : `${queued} changes are`} saved on this device and will upload ${online ? 'in a moment' : 'when you get signal'}.`
+                  : 'No connection. Jobs you save are kept on this device and upload when you reconnect.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {firestoreIssue && (
         <div className="mx-auto max-w-4xl px-4 pt-4">
           <div className={`rounded-2xl border p-4 text-sm shadow-sm ${localDemoMode ? 'border-ink/15 bg-surface text-graphite' : 'border-hazard/40 bg-hazard/10 text-ember'}`}>
@@ -694,10 +902,11 @@ export default function HustleSyncApp() {
       )}
 
       {nav.view === 'new_order' && nav.business && (
-        <NewJobFormRouter 
+        <NewJobFormRouter
           businessType={nav.business}
           user={user}
           onNavigate={navigateTo}
+          jobs={allJobs}
         />
       )}
 
@@ -707,6 +916,7 @@ export default function HustleSyncApp() {
           user={user}
           onNavigate={navigateTo}
           existingJob={nav.job}
+          jobs={allJobs}
         />
       )}
 
@@ -891,8 +1101,19 @@ function BusinessDashboard({ businessType, jobs, userId, onNavigate }) {
   const [deleteErr, setDeleteErr] = useState("");
   const [confirming, setConfirming] = useState(null);
 
+  const [query, setQuery] = useState("");
+
+  // Search covers name, address and phone, which is how someone actually looks
+  // for a job: they remember the street or the person, not the order.
+  const needle = query.trim().toLowerCase();
+  const matchesQuery = (job) => !needle || [job.customerName, job.customerAddress, job.customerPhone]
+    .some(field => String(field || '').toLowerCase().includes(needle));
+
+  // Totals stay over every job. Filtering the list must not change the money.
   const openJobs = jobs.filter(isOpenOrder);
   const completedJobs = jobs.filter(job => !isOpenOrder(job));
+  const openShown = openJobs.filter(matchesQuery);
+  const completedShown = completedJobs.filter(matchesQuery);
   const sum = (list) => list.reduce((total, job) => total + (job.totalPrice || 0), 0);
 
   // Total revenue is work finished. Pending revenue is booked but not yet
@@ -1108,29 +1329,44 @@ function BusinessDashboard({ businessType, jobs, userId, onNavigate }) {
         </div>
       ) : (
         <div className="space-y-10">
+          {jobs.length > 3 && (
+            <div>
+              <label htmlFor="job-search" className="sr-only">Search jobs</label>
+              <input
+                id="job-search"
+                type="search"
+                inputMode="search"
+                placeholder="Search by name, address or phone"
+                className="w-full min-h-12 rounded-xl border border-line bg-surface p-3 text-ink placeholder:text-ash"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+              />
+            </div>
+          )}
+
           <section>
             <h2 className="mb-4 font-display text-xl font-semibold tracking-wide text-graphite">
-              Open orders <span className="text-ash">({openJobs.length})</span>
+              Open orders <span className="text-ash">({needle ? `${openShown.length} of ${openJobs.length}` : openJobs.length})</span>
             </h2>
-            {openJobs.length === 0 ? (
+            {openShown.length === 0 ? (
               <p className="rounded-2xl border border-dashed border-line p-6 text-center text-ash">
-                Nothing outstanding. Every order has been delivered.
+                {needle ? 'No open orders match that search.' : 'Nothing outstanding. Every order has been delivered.'}
               </p>
             ) : (
-              <div className="space-y-4">{openJobs.map(renderJob)}</div>
+              <div className="space-y-4">{openShown.map(renderJob)}</div>
             )}
           </section>
 
           <section>
             <h2 className="mb-4 font-display text-xl font-semibold tracking-wide text-graphite">
-              Completed orders <span className="text-ash">({completedJobs.length})</span>
+              Completed orders <span className="text-ash">({needle ? `${completedShown.length} of ${completedJobs.length}` : completedJobs.length})</span>
             </h2>
-            {completedJobs.length === 0 ? (
+            {completedShown.length === 0 ? (
               <p className="rounded-2xl border border-dashed border-line p-6 text-center text-ash">
-                Nothing delivered yet. Tick an open order complete when the work is done.
+                {needle ? 'No completed orders match that search.' : 'Nothing delivered yet. Tick an open order complete when the work is done.'}
               </p>
             ) : (
-              <div className="space-y-4">{completedJobs.map(renderJob)}</div>
+              <div className="space-y-4">{completedShown.map(renderJob)}</div>
             )}
           </section>
         </div>
@@ -1149,10 +1385,11 @@ function BusinessDashboard({ businessType, jobs, userId, onNavigate }) {
   );
 }
 
-function NewJobFormRouter({ businessType, user, onNavigate, existingJob = null }) {
+function NewJobFormRouter({ businessType, user, onNavigate, existingJob = null, jobs = [] }) {
   const commonProps = {
     user,
     existingJob,
+    knownCustomers: customersFrom(jobs),
     onCancel: () => onNavigate('dashboard', businessType),
     onSave: () => onNavigate('dashboard', businessType)
   };
@@ -1533,7 +1770,23 @@ function JobSummaryLine({ businessType, job }) {
   );
 }
 
-function CustomerSection({ data, setData }) {
+// Repeat customers are the norm in this trade. The details are already in the
+// job list, so there is no reason to retype them. Jobs arrive newest first, so
+// the first match is the most recent version of their details.
+const customersFrom = (jobs = []) => {
+  const seen = new Map();
+  for (const job of jobs) {
+    const name = (job.customerName || '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (!seen.has(key)) {
+      seen.set(key, { name, address: job.customerAddress || '', phone: job.customerPhone || '' });
+    }
+  }
+  return [...seen.values()];
+};
+
+function CustomerSection({ data, setData, knownCustomers = [] }) {
   const [locating, setLocating] = useState(false);
   const [locErr, setLocErr] = useState("");
   const [locNote, setLocNote] = useState("");
@@ -1570,7 +1823,30 @@ function CustomerSection({ data, setData }) {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-bold text-graphite mb-1">Name *</label>
-          <input type="text" className="w-full p-3 bg-paper border border-line rounded-xl min-h-12" value={data.customerName} onChange={e => setData({...data, customerName: e.target.value})} />
+          <input
+            type="text"
+            list="known-customers"
+            autoComplete="off"
+            className="w-full p-3 bg-paper border border-line rounded-xl min-h-12"
+            value={data.customerName}
+            onChange={e => {
+              const name = e.target.value;
+              const match = knownCustomers.find(c => c.name.toLowerCase() === name.trim().toLowerCase());
+              // Only fill blanks, so picking a name never overwrites something
+              // already typed for this job.
+              setData(prev => ({
+                ...prev,
+                customerName: name,
+                customerAddress: match && !prev.customerAddress ? match.address : prev.customerAddress,
+                customerPhone: match && !prev.customerPhone ? match.phone : prev.customerPhone
+              }));
+            }}
+          />
+          {knownCustomers.length > 0 && (
+            <datalist id="known-customers">
+              {knownCustomers.map(c => <option key={c.name} value={c.name} />)}
+            </datalist>
+          )}
         </div>
         <div>
           <label className="block text-sm font-bold text-graphite mb-1">Address *</label>
@@ -1636,7 +1912,7 @@ function SummarySection({ total, saving, onSave, btnTheme, isEdit }) {
   );
 }
 
-function FirewoodForm({ user, onCancel, onSave, existingJob = null }) {
+function FirewoodForm({ user, onCancel, onSave, existingJob = null, knownCustomers = [] }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [data, setData] = useState(() => seedForm({
@@ -1675,7 +1951,7 @@ function FirewoodForm({ user, onCancel, onSave, existingJob = null }) {
 
   return (
     <FormLayout title={existingJob ? "Edit Firewood Order" : "New Firewood Order"} theme="bg-timber" onCancel={onCancel} err={err}>
-      <CustomerSection data={data} setData={setData} />
+      <CustomerSection data={data} setData={setData} knownCustomers={knownCustomers} />
       
       <section className="bg-surface p-6 rounded-2xl shadow-sm border border-line">
         <h3 className="font-bold text-lg mb-4 flex items-center gap-2 border-b pb-2"><Flame className="text-timber"/> Wood Details</h3>
@@ -1752,7 +2028,7 @@ function FirewoodForm({ user, onCancel, onSave, existingJob = null }) {
   );
 }
 
-function HaulingForm({ user, onCancel, onSave, existingJob = null }) {
+function HaulingForm({ user, onCancel, onSave, existingJob = null, knownCustomers = [] }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [data, setData] = useState(() => seedForm({
@@ -1781,7 +2057,7 @@ function HaulingForm({ user, onCancel, onSave, existingJob = null }) {
 
   return (
     <FormLayout title={existingJob ? "Edit Hauling Job" : "New Hauling Job"} theme="bg-haul" onCancel={onCancel} err={err}>
-      <CustomerSection data={data} setData={setData} />
+      <CustomerSection data={data} setData={setData} knownCustomers={knownCustomers} />
       
       <section className="bg-surface p-6 rounded-2xl shadow-sm border border-line">
         <h3 className="font-bold text-lg mb-4 flex items-center gap-2 border-b pb-2"><Trash2 className="text-haul"/> Haul Details</h3>
@@ -1816,7 +2092,7 @@ function HaulingForm({ user, onCancel, onSave, existingJob = null }) {
   );
 }
 
-function TradeForm({ tradeType, user, onCancel, onSave, existingJob = null }) {
+function TradeForm({ tradeType, user, onCancel, onSave, existingJob = null, knownCustomers = [] }) {
   const isPlumbing = tradeType === 'plumbing';
   const themeColors = {
     bg: isPlumbing ? 'bg-flow' : 'bg-hvac',
@@ -1857,7 +2133,7 @@ function TradeForm({ tradeType, user, onCancel, onSave, existingJob = null }) {
 
   return (
     <FormLayout title={existingJob ? `Edit ${themeColors.title.replace("New ", "")}` : themeColors.title} theme={themeColors.bg} onCancel={onCancel} err={err}>
-      <CustomerSection data={data} setData={setData} />
+      <CustomerSection data={data} setData={setData} knownCustomers={knownCustomers} />
       
       <section className="bg-surface p-6 rounded-2xl shadow-sm border border-line">
         <h3 className="font-bold text-lg mb-4 flex items-center gap-2 border-b pb-2"><themeColors.Icon className={themeColors.text}/> Service Details</h3>
@@ -1930,6 +2206,7 @@ function UniversalInvoiceView({ job, onClose }) {
     }
     return [
       `${config.title} - INVOICE`,
+      job.invoiceNumber ? `Invoice No. ${String(job.invoiceNumber).padStart(4, '0')}` : null,
       `Date: ${new Date(job.createdAt).toLocaleDateString()}`,
       '',
       'BILL TO',
@@ -1940,7 +2217,10 @@ function UniversalInvoiceView({ job, onClose }) {
       'ITEMS',
       ...items.map(line => `- ${line}`),
       '',
-      `TOTAL DUE: ${money(job.totalPrice)}`,
+      ...(taxRate > 0
+        ? [`Subtotal: ${money(subtotal)}`, `Tax (${(taxRate * 100).toFixed(2)}%): ${money(taxAmount)}`]
+        : []),
+      `TOTAL DUE: ${money(grandTotal)}`,
       job.notes ? `\nNotes: ${job.notes}` : null,
       '',
       'Thank you for your business! Powered by HustleSync.'
@@ -1958,6 +2238,13 @@ function UniversalInvoiceView({ job, onClose }) {
     document.body.appendChild(popup);
     setTimeout(() => popup.remove(), 3000);
   };
+
+  // Tax is stored per job as a rate, so an old invoice keeps the rate that was
+  // in force when it was raised rather than silently re-pricing itself.
+  const subtotal = job.totalPrice || 0;
+  const taxRate = Number(job.taxRate) || 0;
+  const taxAmount = subtotal * taxRate;
+  const grandTotal = subtotal + taxAmount;
 
   const handleShare = async () => {
     const text = buildInvoiceText();
@@ -2015,6 +2302,11 @@ function UniversalInvoiceView({ job, onClose }) {
             </div>
             <div className="text-right">
               <h2 className="text-2xl font-bold text-ash uppercase tracking-widest">INVOICE</h2>
+              {job.invoiceNumber && (
+                <p className="font-display text-xl font-semibold tabular text-ink">
+                  No. {String(job.invoiceNumber).padStart(4, '0')}
+                </p>
+              )}
               <p className="text-ash font-medium mt-1">Date: {new Date(job.createdAt).toLocaleDateString()}</p>
             </div>
           </div>
@@ -2090,9 +2382,21 @@ function UniversalInvoiceView({ job, onClose }) {
 
           <div className="flex justify-end">
             <div className="w-full sm:w-80 bg-panel text-white p-6 rounded-2xl">
+              {taxRate > 0 && (
+                <>
+                  <div className="flex justify-between items-center mb-2 text-on-panel/70">
+                    <span className="font-medium">Subtotal</span>
+                    <span className="font-display text-lg font-semibold tabular">${subtotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center mb-3 border-b border-white/15 pb-3 text-on-panel/70">
+                    <span className="font-medium">Tax ({(taxRate * 100).toFixed(2)}%)</span>
+                    <span className="font-display text-lg font-semibold tabular">${taxAmount.toFixed(2)}</span>
+                  </div>
+                </>
+              )}
               <div className="flex justify-between items-center mb-2">
                 <span className="text-ash font-bold uppercase tracking-wider text-xs">Total Due</span>
-                <span className="font-display text-4xl font-semibold tabular text-hazard">${(job.totalPrice || 0).toFixed(2)}</span>
+                <span className="font-display text-4xl font-semibold tabular text-hazard">${grandTotal.toFixed(2)}</span>
               </div>
             </div>
           </div>

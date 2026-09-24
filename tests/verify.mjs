@@ -24,11 +24,18 @@ const ok = (name, cond, detail = '') => {
   else { fail++; console.log(`    FAIL  ${name}${detail ? '  <- ' + detail : ''}`); }
 };
 
+// Anonymous sign-ins are rate limited per IP (30/hour by default), so the
+// suite creates exactly two users and reuses them rather than one per test.
 const signIn = async () => {
   const r = await fetch(`${URL_}/auth/v1/signup`, {
     method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: '{}'
   });
   const d = await r.json();
+  if (d.error_code === 'over_request_rate_limit' || r.status === 429) {
+    console.error('\n  Anonymous sign-in rate limit reached (30/hour per IP).');
+    console.error('  Wait an hour, or raise auth.rate_limit.anonymous_users in supabase/config.toml.\n');
+    process.exit(2);
+  }
   if (!d.access_token) throw new Error('anon sign-in failed: ' + JSON.stringify(d));
   return { token: d.access_token, uid: d.user.id };
 };
@@ -51,7 +58,13 @@ const insert = async (token, uid, row) => {
 const iso = (daysFromNow) => new Date(Date.now() + daysFromNow * 864e5).toISOString().slice(0, 10);
 
 // Baseline: how many rows exist before we touch anything.
-const admin = await signIn();
+const alice = await signIn();
+const bob = await signIn();
+const wipe = async (who) => {
+  const rows = await (await rest('jobs?select=id', who.token)).json();
+  for (const r of rows) await rest(`jobs?id=eq.${r.id}`, who.token, { method: 'DELETE' });
+};
+const admin = alice;
 const baselineRes = await rest('jobs?select=id', admin.token);
 const baseline = (await baselineRes.json()).length;
 console.log(`\nBaseline: ${baseline} row(s) visible to a fresh user (RLS means real data is invisible here by design)\n`);
@@ -59,7 +72,7 @@ console.log(`\nBaseline: ${baseline} row(s) visible to a fresh user (RLS means r
 // ---------------------------------------------------------------------------
 console.log('TEST 1  Row level security isolates every user');
 {
-  const a = await signIn(), b = await signIn();
+  const a = alice, b = bob;
   const mine = await insert(a.token, a.uid, {
     business_type: 'hauling', customer_name: 'T1 Owner', customer_address: '1 Test Rd', total_price: 200
   });
@@ -84,7 +97,8 @@ console.log('TEST 1  Row level security isolates every user');
 // ---------------------------------------------------------------------------
 console.log('\nTEST 2  Order lifecycle: open, complete, paid');
 {
-  const u = await signIn();
+  await wipe(alice);
+  const u = alice;
   const future = await insert(u.token, u.uid, {
     business_type: 'firewood', customer_name: 'T2 Future', customer_address: '2 Test Rd',
     total_price: 300, wood_quantity: 1, delivery_date: iso(7)
@@ -119,7 +133,8 @@ console.log('\nTEST 2  Order lifecycle: open, complete, paid');
 // ---------------------------------------------------------------------------
 console.log('\nTEST 3  Cord fractions and the revenue split');
 {
-  const u = await signIn();
+  await wipe(alice);
+  const u = alice;
   for (const [name, cords, price] of [['T3 Half', 0.5, 150], ['T3 Quarter', 0.25, 75], ['T3 Full', 1, 300]]) {
     await insert(u.token, u.uid, {
       business_type: 'firewood', customer_name: name, customer_address: 'x',
@@ -142,9 +157,8 @@ console.log('\nTEST 3  Cord fractions and the revenue split');
 
 // ---------------------------------------------------------------------------
 console.log('\nCleaning up rows this run created');
-for (const { id, token } of created) {
-  await rest(`jobs?id=eq.${id}`, token, { method: 'DELETE' });
-}
+await wipe(alice);
+await wipe(bob);
 const afterRes = await rest('jobs?select=id', admin.token);
 const after = (await afterRes.json()).length;
 ok(`pre-existing data untouched (${baseline} before, ${after} after)`, after === baseline);
