@@ -1,5 +1,62 @@
 @import "tailwindcss";
 
+/* Design tokens.
+   Palette is work-gear: warm neutrals and hazard amber, taken from the app mark.
+   Trade colours are desaturated to gear tones rather than UI primaries so four
+   business lines can sit side by side without shouting at each other.
+   Type is Barlow, drawn from Californian highway and public signage, which is
+   the vernacular of the trucks and job sites this app is used on. */
+@theme {
+  --font-sans: "Barlow", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Barlow Condensed", "Barlow", ui-sans-serif, system-ui, sans-serif;
+
+  /* Semantic, not literal. Every one of these is redefined below for dark
+     mode, so utilities like bg-surface and text-ink flip on their own and the
+     components need no dark: variants. */
+  --color-paper: #edeae5;     /* page background */
+  --color-surface: #ffffff;   /* cards and rows */
+  --color-ink: #14110f;       /* primary text */
+  --color-graphite: #3f3a36;  /* secondary text */
+  --color-ash: #6b635c;       /* labels and metadata */
+  --color-line: rgba(20, 17, 15, 0.12);
+
+  /* Panels that stay dark in both themes, such as the revenue hero and the
+     invoice total. Their text uses on-panel, which stays light. */
+  --color-panel: #14110f;
+  --color-on-panel: #f3f0eb;
+
+  --color-hazard: #f59e0b;
+  --color-ember: #b45309;
+
+  --color-timber: #b45309;
+  --color-haul: #3f4a56;
+  --color-flow: #0e6f7a;
+  --color-hvac: #8c2f39;
+}
+
+/* Drive the dark variant from an attribute so the toggle can override the
+   system preference rather than only following it. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+[data-theme="dark"] {
+  --color-paper: #14110f;
+  --color-surface: #1e1a18;
+  --color-ink: #f3f0eb;
+  --color-graphite: #d2ccc5;
+  --color-ash: #9a918a;
+  --color-line: rgba(255, 255, 255, 0.14);
+
+  --color-panel: #241f1c;
+  --color-on-panel: #f3f0eb;
+
+  /* Trade colours lift in dark mode; the light-mode values fail contrast
+     against a near-black surface. */
+  --color-timber: #e08c2e;
+  --color-haul: #93a7bb;
+  --color-flow: #3fb3c0;
+  --color-hvac: #d9737f;
+}
+
 html {
   min-height: 100%;
   -webkit-text-size-adjust: 100%;
@@ -9,7 +66,16 @@ html {
 body {
   min-height: 100svh;
   margin: 0;
-  background: #1c1917;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  /* Signage type reads best with its natural spacing; no tracking games. */
+  font-feature-settings: "tnum" 1;
+}
+
+/* Money and counts line up in columns when the figures are tabular. */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 button,
@@ -29,6 +95,23 @@ button {
   touch-action: manipulation;
 }
 
+/* Visible keyboard focus everywhere, including on the dark shell. */
+:focus-visible {
+  outline: 2px solid var(--color-hazard);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 #root {
   min-height: 100svh;
 }
@@ -40,19 +123,63 @@ body,
 }
 
 @media print {
-  body * {
-    visibility: hidden;
+  @page {
+    size: auto;
+    margin: 12mm;
   }
+
+  /* The app shell is dark; paper is not. */
+  html,
+  body {
+    background: #fff !important;
+    color: #14110f !important;
+  }
+
+  /* Paper is paper: force the light palette even if the screen is dark. */
+  :root, [data-theme="dark"] {
+    --color-paper: #ffffff;
+    --color-surface: #ffffff;
+    --color-ink: #14110f;
+    --color-graphite: #3f3a36;
+    --color-ash: #6b635c;
+    --color-line: rgba(20, 17, 15, 0.18);
+    --color-panel: #14110f;
+    --color-on-panel: #ffffff;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
   #printable-invoice,
   #printable-invoice * {
-    visibility: visible;
+    visibility: visible !important;
+    /* Without this the dark "Total Due" panel prints as white-on-white. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
+
   #printable-invoice {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
     margin: 0;
-    padding: 20px;
+    padding: 0;
+  }
+
+  /* On screen the line-item table scrolls sideways; on paper it must fit. */
+  #printable-invoice .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  #printable-invoice table {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  /* Don't split a line item across two pages. */
+  #printable-invoice tr {
+    break-inside: avoid;
   }
 }

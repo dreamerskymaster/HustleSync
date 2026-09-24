@@ -1,28 +1,107 @@
-# Claude Instructions
+# Claude instructions
 
-## Project conventions
+## What this is
 
-- Keep the app optimized for web and mobile browsers.
-- Prefer minimal, focused changes over broad refactors unless explicitly requested.
-- Keep Firebase configuration in `.env` and out of source control.
-- Use the Vite entry points already in the repo.
+HustleSync: job and invoice tracking for a one-person field service operation
+running four trades (firewood, hauling, plumbing, HVAC). Mobile first. The user
+is standing in a driveway, one handed, in sunlight. Optimise for that, not for a
+desktop admin panel.
 
-## Working notes
+## Conventions
 
-- `src/App.jsx` contains the main app source.
-- Firebase Hosting is configured to serve `dist/`.
+- Keep the app fast and legible on phones. Touch targets stay at `min-h-12`.
+- Prefer minimal, focused changes over broad refactors unless asked.
+- Keep Firebase config in `.env`, out of source control.
+- All app source lives in `src/App.jsx`. It is one large file on purpose; match
+  the surrounding style rather than introducing a new structure mid-file.
+- No em dashes anywhere, in code, comments, copy, or docs.
 
-## Useful commands
+## Design system
+
+Tokens are defined in `src/index.css` under `@theme`, not in
+`tailwind.config.js`. Tailwind 4 is CSS-first here.
+
+- Neutrals: `ink`, `graphite`, `ash`, `paper`
+- Accent: `hazard`, `ember`
+- Trades: `timber`, `haul`, `flow`, `hvac`
+- Type: `font-display` is Barlow Condensed (headings, figures), the default sans
+  is Barlow. Use `.tabular` on money and counts.
+
+Rules that matter:
+
+- Trade colours must appear as literal class strings. Tailwind scans source
+  text, so `bg-${trade}` silently produces no CSS.
+- Weight tops out at `font-bold`. Do not reintroduce `font-black`.
+- No all-caps tracked micro-labels, no middle-dot meta joins, no arrows glued to
+  link text. These were removed deliberately.
+- Accent colour carries meaning. A zero value is not accented.
+
+## Supabase
+
+- `db push` and `link -p` want the database password. `supabase db query
+  --linked` goes through the Management API and needs none, so use it for
+  schema work and for inspecting data.
+- `supabase/schema.sql` is idempotent and safe to re-run. The realtime
+  publication line is wrapped in an exception block for exactly that reason.
+- `config push` sends the whole of `config.toml`, not just the line you edited.
+  Check `supabase config diff` first on a project with real settings.
+- Postgres numerics come back as strings over PostgREST. `rowToJob` coerces
+  them, because the UI does arithmetic on those fields.
+- `status` is a generated column. Never write to it.
+
+## Things that will bite you
+
+- **Never use `npx` in this repo.** `npx firebase-tools deploy` and `npx cap sync`
+  hang indefinitely at zero CPU, producing no output at all. Call the binaries
+  directly instead: `./node_modules/.bin/firebase`, `./node_modules/.bin/cap`.
+  Same commands, same flags, and they complete in seconds. This cost a long
+  debugging detour once already.
+- **Order state is two independent ticks.** `completedAt` and `paidAt` are
+  nullable timestamps; `status` is derived from `completedAt` so it cannot
+  drift. Editing an order must never write either field, or fixing a typo would
+  move the order between sections.
+
+- **Firestore rules gate everything.** `firestore.rules` must be deployed or
+  every write fails with PERMISSION_DENIED while the UI looks healthy. This was
+  the original bug in this project.
+- **Do not swallow save errors.** An earlier version caught Firestore failures,
+  wrote to localStorage, and reported success. Failures must surface.
+- **`#printable-invoice`** must stay on the invoice card or printing yields a
+  blank page. The print CSS hides everything else.
+- **Never call `getCurrentPosition` once and trust it.** A device returns a
+  coarse cell or wifi fix within a second, then tightens to GPS over several
+  seconds. Asking once captures the worst fix of the session, which is why the
+  pin used to return a town instead of a street. `readBestFix` watches the
+  stream, keeps the tightest fix, and stops at 20 m or 12 s. Measured effect on
+  one desktop: town-only before, `360 Martin Luther King Drive, Norwalk,
+  Connecticut, 06853` at 40 m after.
+- **Never discard `coords.accuracy`.** A 3 km fix still yields a confident
+  looking town name. Anything coarser than 100 m is labelled approximate.
+- **Geocoder order is measured, not guessed.** Nominatim returns a house number
+  in urban, suburban, small town and most rural cases; Photon fills some gaps
+  but disagreed with Nominatim on one address; BigDataCloud never returns a
+  house number. `reverseGeocode` prefers whichever result carries one.
+- **Geocoding fetches need timeouts.** Browser `fetch` has none, and the three
+  providers run in series, so a hung request means an endless spinner.
+- **Cache headers are deliberate** in `firebase.json`. `index.html` is
+  `no-cache`; `/assets/**` is immutable for a year. Do not "simplify" these.
+- **The address field stays free text.** The location pin fills it in; it never
+  replaces the input.
+
+## Commands
 
 ```bash
 npm install
 npm run dev
 npm run build
-npx firebase-tools deploy
+./node_modules/.bin/firebase deploy                        # hosting and rules
+./node_modules/.bin/firebase deploy --only firestore:rules # rules only
+./node_modules/.bin/cap sync                               # web build into ios/ and android/
 ```
 
-## Deployment notes
+## Deployment
 
-- Use Firebase Hosting for the simplest deploy path.
-- If Firebase CLI asks for auth, use the browser login flow.
-- Keep Firestore and Anonymous Auth enabled in the Firebase project.
+- Firebase Hosting serves `dist/`.
+- `npx firebase-tools deploy` ships hosting and Firestore rules together.
+- After any web change intended for a phone, run `npx cap sync` before building
+  natively.

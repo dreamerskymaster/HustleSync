@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="HustleSync">
+  <defs>
+    <linearGradient id="hs-tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d2926"/>
+      <stop offset="1" stop-color="#0e0c0b"/>
+    </linearGradient>
+    <radialGradient id="hs-glow" cx="0.28" cy="0.22" r="0.75">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hs-mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#hs-tile)"/>
+  <rect width="64" height="64" rx="14" fill="url(#hs-glow)"/>
+  <g fill="none" stroke="url(#hs-mark)" stroke-width="5.0" stroke-linecap="round">
+    <path d="M19.31 26.08 A14.0 14.0 0 0 1 44.69 26.08"/>
+    <path d="M44.69 37.92 A14.0 14.0 0 0 1 19.31 37.92"/>
+  </g>
+  <g fill="url(#hs-mark)">
+    <path d="M49.34 36.05 L38.34 29.04 L51.03 23.13 Z"/>
+    <path d="M14.66 27.95 L25.66 34.96 L12.97 40.87 Z"/>
+  </g>
+</svg>
