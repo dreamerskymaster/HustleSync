@@ -481,31 +481,50 @@ if (hasFirebaseConfig) {
 // Use sandbox appId if available, otherwise default for production
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'hustlesync-prod';
 
+// Never hide the real reason a save failed. The previous version returned
+// Firestore-flavoured copy for a Supabase app and swallowed the actual error,
+// which made every report unactionable. Postgres and PostgREST return precise
+// codes, so check those before guessing at wording, and always append the raw
+// detail so a screenshot is enough to diagnose from.
 const describeSaveError = (error) => {
-  const message = error?.message || error?.code || '';
+  const message = String((error && error.message) || '');
+  const code = String((error && error.code) || '');
+  const status = error && error.status;
+  const detail = [code, message].filter(Boolean).join(': ').slice(0, 220);
 
-  if (/ERR_BLOCKED_BY_CLIENT|blocked by client|firestore.googleapis/i.test(message)) {
-    return 'Firestore is being blocked by your browser, extension, or network policy. Disable ad blockers/privacy filters and allow firestore.googleapis.com, then try again.';
+  if (code === '23502') {
+    return `A required field was empty, so the database rejected it. ${detail}`;
   }
-
+  if (code === '23505') {
+    return `That record already exists. ${detail}`;
+  }
+  if (code === '42501' || /row-level security/i.test(message)) {
+    return 'This session is not allowed to save that. Close and reopen the app to sign in again.';
+  }
+  if (code === 'PGRST205') {
+    return 'The jobs table is missing from the database. The schema needs to be applied.';
+  }
+  if (code === 'PGRST204' || /schema cache/i.test(message)) {
+    // A column the app sends is not in PostgREST's cached schema, which happens
+    // when the table changed but the cache has not reloaded yet.
+    return `The app sent a field the database does not know about yet. ${detail}`;
+  }
+  if (status === 429 || /rate limit|too many requests/i.test(message)) {
+    return 'Too many sign-ins from this network in the last hour. Wait a few minutes, then try again.';
+  }
+  if (/failed to fetch|networkerror|network request failed|load failed|timed out|offline/i.test(message)) {
+    return 'No connection. This job is saved on your device and will upload when you get signal.';
+  }
+  if (status === 401 || /jwt|invalid token|unauthor/i.test(message)) {
+    return 'Your session expired. Close and reopen the app to sign in again.';
+  }
   if (/permission|insufficient|PERMISSION_DENIED/i.test(message)) {
-    return 'Firestore rejected the write (permission denied). Deploy the security rules with: npx firebase-tools deploy --only firestore:rules';
+    return `The database refused the write. ${detail}`;
   }
 
-  if (/timed out/i.test(message)) {
-    return 'The save never reached Firestore. An ad blocker, privacy extension, VPN, or network firewall is blocking firestore.googleapis.com. Disable it for this site and try again.';
-  }
-
-  if (/unavailable|offline/i.test(message)) {
-    return 'Firestore is unreachable. Check your internet connection and try again.';
-  }
-
-  if (/network|fetch/i.test(message)) {
-    return 'The network request failed. Please check your internet connection and try again.';
-  }
-
-  return 'Save failed. Check your Firebase Firestore access and try again.';
+  return `Save failed. ${detail || 'The server returned no details.'}`;
 };
+
 
 // HustleSync brand mark - mirrors public/favicon.svg
 export function HustleSyncMark({ className = "h-8 w-8", tile = true }) {
