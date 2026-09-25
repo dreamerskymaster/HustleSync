@@ -21,7 +21,8 @@ create table if not exists public.jobs (
   wood_quantity    numeric,
   wood_size        text,
   custom_wood_size text,
-  price_per_cord   numeric,
+  price_per_cord   numeric,   -- legacy rate, kept for older rows
+  wood_price       numeric,   -- what the customer is charged for the wood itself
   is_stacked       boolean,
   stacking_price   numeric,
   delivery_date    date,

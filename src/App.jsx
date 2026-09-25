@@ -58,11 +58,12 @@ const JOB_FIELDS = [
   ['partsCost', 'parts_cost'], ['laborHours', 'labor_hours'],
   ['hourlyRate', 'hourly_rate'],
   ['completedAt', 'completed_at'], ['paidAt', 'paid_at'],
-  ['invoiceNumber', 'invoice_number'], ['taxRate', 'tax_rate']
+  ['invoiceNumber', 'invoice_number'], ['taxRate', 'tax_rate'],
+  ['woodPrice', 'wood_price']
 ];
 
 const NUMERIC_FIELDS = new Set([
-  'invoiceNumber', 'taxRate',
+  'invoiceNumber', 'taxRate', 'woodPrice',
   'totalPrice', 'woodQuantity', 'pricePerCord', 'stackingPrice',
   'basePrice', 'dumpFee', 'partsCost', 'laborHours', 'hourlyRate'
 ]);
@@ -70,8 +71,12 @@ const NUMERIC_FIELDS = new Set([
 const jobToRow = (job, userId) => {
   const row = { user_id: userId };
   for (const [key, column] of JOB_FIELDS) {
+    // Omit anything the form never set so the column default applies. Writing
+    // an explicit null here broke every save once tax_rate (not null, default
+    // 0) was added, and would break invoice_number's trigger the same way.
+    if (!(key in job) || job[key] === undefined) continue;
     let value = job[key];
-    if (value === undefined || value === '') value = null;
+    if (value === '') value = null;
     // completedAt and paidAt are epoch milliseconds in the app, timestamptz here.
     if ((column === 'completed_at' || column === 'paid_at') && typeof value === 'number') {
       value = new Date(value).toISOString();
@@ -1917,7 +1922,7 @@ function FirewoodForm({ user, onCancel, onSave, existingJob = null, knownCustome
   const [err, setErr] = useState("");
   const [data, setData] = useState(() => seedForm({
     customerName: "", customerAddress: "", customerPhone: "",
-    woodQuantity: "1", woodSize: "Full Cord", customWoodSize: "", pricePerCord: "300",
+    woodQuantity: "1", woodSize: "Full Cord", customWoodSize: "", woodPrice: "300",
     isStacked: true, stackingPrice: "50",
     deliveryDate: "", notes: ""
   }, existingJob));
@@ -1928,9 +1933,11 @@ function FirewoodForm({ user, onCancel, onSave, existingJob = null, knownCustome
     setData(prev => ({ ...prev, stackingPrice: (cords * 50).toString() }));
   }, [cords]);
 
-  const totalQuantityPrice = cords * (parseFloat(data.pricePerCord) || 0);
+  // The price is whatever is typed, for whatever amount was picked. It is not a
+  // rate: a half cord can be priced at anything the customer agreed to.
+  const woodPrice = parseFloat(data.woodPrice) || 0;
   const logisticsPrice = data.isStacked ? (parseFloat(data.stackingPrice) || 0) : 0;
-  const totalPrice = totalQuantityPrice + logisticsPrice;
+  const totalPrice = woodPrice + logisticsPrice;
 
   const handleSubmit = async () => {
     if (!data.customerName || !data.customerAddress) return setErr("Name and Address required.");
@@ -1938,7 +1945,7 @@ function FirewoodForm({ user, onCancel, onSave, existingJob = null, knownCustome
     try {
       const payload = {
         ...data, businessType: 'firewood',
-        woodQuantity: cords, pricePerCord: parseFloat(data.pricePerCord),
+        woodQuantity: cords, woodPrice,
         stackingPrice: data.isStacked ? parseFloat(data.stackingPrice) : 0,
         totalPrice, createdAt: Date.now()
       };
@@ -1985,11 +1992,21 @@ function FirewoodForm({ user, onCancel, onSave, existingJob = null, knownCustome
             </div>
           )}
           <div className="col-span-2">
-            <label className="block text-sm font-bold text-graphite mb-1">Price per Cord</label>
+            <label className="block text-sm font-bold text-graphite mb-1">Wood price</label>
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-ash font-bold">$</span>
-              <input type="number" className="w-full pl-8 p-3 bg-paper border border-line rounded-xl font-bold text-graphite min-h-12" value={data.pricePerCord} onChange={e => setData({...data, pricePerCord: e.target.value})} />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-full pl-8 p-3 bg-paper border border-line rounded-xl font-bold text-graphite min-h-12"
+                value={data.woodPrice}
+                onChange={e => setData({ ...data, woodPrice: e.target.value })}
+              />
             </div>
+            <p className="mt-1 text-sm text-ash">
+              What you are charging for the wood itself, for the amount above. Stacking is added separately.
+            </p>
           </div>
         </div>
       </section>
@@ -2195,7 +2212,7 @@ function UniversalInvoiceView({ job, onClose }) {
   const buildInvoiceText = () => {
     const items = [];
     if (isFirewood) {
-      items.push(`Firewood (${job.woodSize}) - ${job.woodQuantity} cords @ ${money(job.pricePerCord)}/cord - ${money((job.woodQuantity || 0) * (job.pricePerCord || 0))}`);
+      items.push(`Firewood (${job.woodSize}) - ${plural(job.woodQuantity, 'cord', 'cords')} - ${money(firewoodCharge)}`);
       if (job.isStacked) items.push(`Stacking service - ${money(job.stackingPrice)}`);
     } else if (isHauling) {
       items.push(`Hauling labor & transport (${job.loadSize}) - ${money(job.basePrice)}`);
@@ -2241,6 +2258,11 @@ function UniversalInvoiceView({ job, onClose }) {
 
   // Tax is stored per job as a rate, so an old invoice keeps the rate that was
   // in force when it was raised rather than silently re-pricing itself.
+  // Rows saved before the flat price change stored a per cord rate instead.
+  const firewoodCharge = job.woodPrice != null
+    ? Number(job.woodPrice)
+    : (Number(job.woodQuantity) || 0) * (Number(job.pricePerCord) || 0);
+
   const subtotal = job.totalPrice || 0;
   const taxRate = Number(job.taxRate) || 0;
   const taxAmount = subtotal * taxRate;
@@ -2332,9 +2354,9 @@ function UniversalInvoiceView({ job, onClose }) {
                 {isFirewood && (
                   <>
                     <tr className="border-b border-line">
-                      <td className="py-5">Firewood ({job.woodSize})<br/><span className="text-sm text-ash">@ ${job.pricePerCord}/cord</span></td>
+                      <td className="py-5">Firewood<br/><span className="text-sm text-ash">{job.woodSize}</span></td>
                       <td className="py-5 text-center">{job.woodQuantity} cords</td>
-                      <td className="py-5 text-right">${(job.woodQuantity * job.pricePerCord).toFixed(2)}</td>
+                      <td className="py-5 text-right">${firewoodCharge.toFixed(2)}</td>
                     </tr>
                     {job.isStacked && (
                       <tr className="border-b border-line">
