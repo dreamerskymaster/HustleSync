@@ -8,7 +8,7 @@
     "build": "vite build",
     "deploy": "firebase deploy",
     "preview": "vite preview",
-    "test": "node tests/verify.mjs"
+    "test": "node tests/mapping.test.mjs && node tests/verify.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

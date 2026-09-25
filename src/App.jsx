@@ -9,6 +9,7 @@ import { Geolocation } from '@capacitor/geolocation';
 import { Share } from '@capacitor/share';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { createClient } from '@supabase/supabase-js';
+import { JOB_FIELDS, encodeColumn, jobToRow, rowToJob } from './jobMapping.js';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth,
@@ -43,68 +44,6 @@ const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY;
 const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 const usePostgres = Boolean(supabase);
-
-// The app speaks camelCase; Postgres columns are snake_case.
-const JOB_FIELDS = [
-  ['businessType', 'business_type'], ['customerName', 'customer_name'],
-  ['customerAddress', 'customer_address'], ['customerPhone', 'customer_phone'],
-  ['totalPrice', 'total_price'], ['notes', 'notes'],
-  ['woodQuantity', 'wood_quantity'], ['woodSize', 'wood_size'],
-  ['customWoodSize', 'custom_wood_size'], ['pricePerCord', 'price_per_cord'],
-  ['isStacked', 'is_stacked'], ['stackingPrice', 'stacking_price'],
-  ['deliveryDate', 'delivery_date'], ['loadSize', 'load_size'],
-  ['basePrice', 'base_price'], ['dumpFee', 'dump_fee'],
-  ['systemType', 'system_type'], ['diagnosis', 'diagnosis'],
-  ['partsCost', 'parts_cost'], ['laborHours', 'labor_hours'],
-  ['hourlyRate', 'hourly_rate'],
-  ['completedAt', 'completed_at'], ['paidAt', 'paid_at'],
-  ['invoiceNumber', 'invoice_number'], ['taxRate', 'tax_rate'],
-  ['woodPrice', 'wood_price']
-];
-
-const NUMERIC_FIELDS = new Set([
-  'invoiceNumber', 'taxRate', 'woodPrice',
-  'totalPrice', 'woodQuantity', 'pricePerCord', 'stackingPrice',
-  'basePrice', 'dumpFee', 'partsCost', 'laborHours', 'hourlyRate'
-]);
-
-const jobToRow = (job, userId) => {
-  const row = { user_id: userId };
-  for (const [key, column] of JOB_FIELDS) {
-    // Omit anything the form never set so the column default applies. Writing
-    // an explicit null here broke every save once tax_rate (not null, default
-    // 0) was added, and would break invoice_number's trigger the same way.
-    if (!(key in job) || job[key] === undefined) continue;
-    let value = job[key];
-    if (value === '') value = null;
-    // completedAt and paidAt are epoch milliseconds in the app, timestamptz here.
-    if ((column === 'completed_at' || column === 'paid_at') && typeof value === 'number') {
-      value = new Date(value).toISOString();
-    }
-    // A date column rejects '' but accepts null.
-    if (column === 'delivery_date' && !value) value = null;
-    row[column] = value;
-  }
-  // The app treats createdAt as epoch milliseconds throughout.
-  row.created_at = new Date(job.createdAt || Date.now()).toISOString();
-  return row;
-};
-
-const rowToJob = (row) => {
-  const job = { id: row.id, createdAt: Date.parse(row.created_at) };
-  for (const [key, column] of JOB_FIELDS) {
-    let value = row[column];
-    if ((column === 'completed_at' || column === 'paid_at')) {
-      job[key] = value ? Date.parse(value) : null;
-      continue;
-    }
-    // Postgres numerics can arrive as strings; the UI does arithmetic on them.
-    job[key] = NUMERIC_FIELDS.has(key) && value !== null && value !== undefined
-      ? Number(value)
-      : value;
-  }
-  return job;
-};
 
 const fetchPostgresJobs = async (userId) => {
   const { data, error } = await supabase
@@ -368,10 +307,7 @@ const updateJobFields = async (jobId, userId, fields, direct = false) => {
     // Send only the columns that changed, mapped to snake_case.
     const row = {};
     for (const [key, column] of JOB_FIELDS) {
-      if (key in fields) {
-        const value = fields[key];
-        row[column] = value === undefined || value === '' ? null : value;
-      }
+      if (key in fields) row[column] = encodeColumn(column, fields[key]);
     }
     try {
       const { error } = await supabase.from('jobs').update(row).eq('id', jobId).eq('user_id', userId);
