@@ -77,3 +77,71 @@ export const rowToJob = (row) => {
   }
   return job;
 };
+
+
+export const isOpenOrder = (job) => !job.completedAt;
+export const isUnpaid = (job) => Boolean(job.completedAt) && !job.paidAt;
+
+// Create and edit share one path. Editing never touches completedAt or paidAt,
+// so correcting an address cannot silently change where an order sits.
+// Form inputs hold strings; a saved job holds numbers and booleans. Seeding an
+// edit form means converting back, keyed off the shape of the blank form.
+const seedForm = (blank, job) => {
+  if (!job) return blank;
+  const seeded = { ...blank };
+  for (const key of Object.keys(blank)) {
+    const value = job[key];
+    if (value === undefined || value === null) continue;
+    seeded[key] = typeof blank[key] === 'boolean' ? Boolean(value) : String(value);
+  }
+  return seeded;
+};
+
+const submitJob = async (payload, userId, existingJob) => {
+  if (existingJob && existingJob.id) {
+    await updateJobFields(existingJob.id, userId, payload);
+    return { id: existingJob.id, ...payload };
+  }
+  return persistJob(payload, userId);
+};
+
+export const TRADE_LABELS = {
+  firewood: 'Timber', hauling: 'Haul', plumbing: 'Flow', heating: 'HVAC'
+};
+
+export const asDate = (value) => (value ? new Date(value).toISOString().slice(0, 10) : '');
+
+// One row per job, in the order someone would want to read them in a
+// spreadsheet: what it was, who for, where it stands, what it was worth.
+export const CSV_COLUMNS = [
+  ['Invoice', job => job.invoiceNumber || ''],
+  ['Logged', job => asDate(job.createdAt)],
+  ['Trade', job => TRADE_LABELS[job.businessType] || job.businessType],
+  ['Customer', job => job.customerName || ''],
+  ['Address', job => job.customerAddress || ''],
+  ['Phone', job => job.customerPhone || ''],
+  ['Status', job => (isOpenOrder(job) ? 'Open' : 'Completed')],
+  ['Scheduled', job => job.deliveryDate || ''],
+  ['Completed', job => asDate(job.completedAt)],
+  ['Paid', job => asDate(job.paidAt)],
+  ['Amount', job => (Number(job.totalPrice) || 0).toFixed(2)],
+  ['Cords', job => (job.businessType === 'firewood' ? job.woodQuantity ?? '' : '')],
+  ['Hours', job => (job.businessType === 'plumbing' || job.businessType === 'heating' ? job.laborHours ?? '' : '')],
+  ['Details', job => job.diagnosis || job.systemType || job.loadSize || job.woodSize || ''],
+  ['Notes', job => job.notes || '']
+];
+
+// A value containing a comma, quote or newline has to be quoted, and inner
+// quotes doubled, or the file silently corrupts on import.
+export const csvCell = (value) => {
+  const text = value === null || value === undefined ? '' : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+export const buildCsv = (jobs) => {
+  const lines = [CSV_COLUMNS.map(([heading]) => csvCell(heading)).join(',')];
+  for (const job of jobs) {
+    lines.push(CSV_COLUMNS.map(([, read]) => csvCell(read(job))).join(','));
+  }
+  return lines.join('\r\n');
+};

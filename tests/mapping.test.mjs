@@ -7,7 +7,7 @@
 //
 //   node tests/mapping.test.mjs
 
-import { JOB_FIELDS, encodeColumn, jobToRow, rowToJob } from '../src/jobMapping.js';
+import { JOB_FIELDS, encodeColumn, jobToRow, rowToJob, csvCell, buildCsv } from '../src/jobMapping.js';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = '') => {
@@ -74,6 +74,46 @@ console.log('\nTEST 4  Row mapping');
   ok('timestamps come back as epoch ms', typeof job.paidAt === 'number' && job.paidAt > 0, String(job.paidAt));
   ok('null timestamp stays null', job.completedAt === null);
   ok('round trip survives', ISO.test(jobToRow(job, UID).paid_at), String(jobToRow(job, UID).paid_at));
+}
+
+// CSV export. A stray comma or quote silently corrupts a spreadsheet, and the
+// damage is invisible until someone opens the file weeks later.
+console.log('\nTEST 5  CSV export');
+{
+  ok('plain text is unquoted', csvCell('Eleanor Hayes') === 'Eleanor Hayes');
+  ok('a comma forces quoting', csvCell('41 Birch Hollow Rd, Concord NH') === '"41 Birch Hollow Rd, Concord NH"');
+  ok('inner quotes are doubled', csvCell('Said "urgent"') === '"Said ""urgent"""');
+  ok('newlines are quoted', csvCell('line one\nline two') === '"line one\nline two"');
+  ok('null becomes empty', csvCell(null) === '' && csvCell(undefined) === '');
+
+  const csv = buildCsv([
+    { invoiceNumber: 1, createdAt: Date.parse('2026-09-24T10:00:00Z'), businessType: 'firewood',
+      customerName: 'A, Inc', customerAddress: '1 St', totalPrice: 262.5, woodQuantity: 0.75,
+      deliveryDate: '2026-10-05', notes: 'he said "leave it"' },
+    { invoiceNumber: 2, createdAt: Date.parse('2026-09-24T10:00:00Z'), businessType: 'hauling',
+      customerName: 'B', customerAddress: '2 St', totalPrice: 325, completedAt: Date.parse('2026-09-24T12:00:00Z') }
+  ]);
+  const lines = csv.split('\r\n');
+  ok('header plus one line per job', lines.length === 3, String(lines.length));
+  ok('uses CRLF line endings', csv.includes('\r\n'));
+  ok('open job reports Open', lines[1].includes('Open'));
+  ok('completed job reports Completed', lines[2].includes('Completed'));
+  ok('amount is fixed to 2 decimals', lines[1].includes('262.50'));
+  ok('embedded comma did not add a column',
+     lines[1].split(',').length === lines[2].split(',').length + 1 || lines[1].includes('"A, Inc"'));
+  ok('embedded quotes survived', lines[1].includes('""leave it""'));
+  ok('every row has the same field count', (() => {
+    const count = (line) => {
+      let n = 1, inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === '"') { if (inQ && line[i + 1] === '"') i++; else inQ = !inQ; }
+        else if (c === ',' && !inQ) n++;
+      }
+      return n;
+    };
+    return count(lines[0]) === count(lines[1]) && count(lines[1]) === count(lines[2]);
+  })());
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

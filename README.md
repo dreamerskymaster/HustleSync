@@ -89,17 +89,34 @@ exist in Postgres, and you can still query them with the CLI above, but the app
 cannot re-associate them. Email or Google sign-in is the fix before real
 customer data goes in.
 
+## Exporting
+
+Every board has an export button. The home screen exports all trades, a trade
+board exports just that trade. The file opens cleanly in Excel, Numbers and
+Sheets: it carries a byte order mark so UTF-8 names survive, quotes any value
+containing a comma, quote or newline, and uses CRLF endings.
+
+On a phone a WebView cannot trigger a download, so the native build hands the
+CSV to the share sheet instead. Mail it to yourself or save it to Files.
+
 ## Tests
 
 ```bash
-npm test
+npm test          # unit suite, then integration suite
 ```
 
-Three suites run against the live backend: row level security isolation, the
-order lifecycle (open, complete, paid), and cord fraction totals with the
-revenue split. Every row they create belongs to throwaway anonymous users and is
-removed afterwards; the suite counts pre-existing rows before and after and
-fails if that number changes.
+**`tests/mapping.test.mjs`** covers `src/jobMapping.js` with no network: field
+mapping, timestamp encoding, numeric round trips and CSV escaping. This file
+exists because two production bugs shipped from code nothing could import.
+
+**`tests/verify.mjs`** runs against the live backend: row level security
+isolation, the order lifecycle, and cord fractions with the revenue split.
+Every row it creates belongs to throwaway anonymous users and is deleted
+afterwards. It counts pre-existing rows before and after and fails if that
+number changes, so it is safe to run against real data.
+
+Anonymous sign-ins are rate limited to 30/hour per IP. The suite uses two
+sessions per run, so roughly 15 runs an hour.
 
 ## Design system
 
@@ -176,3 +193,8 @@ falling back to local storage and reporting success.
 | Pin returns town only | Coarse desktop location; real GPS resolves the street |
 | Jobs vanished | Anonymous auth identity was reset; see Known limitation |
 | `npx` command hangs forever | Use `./node_modules/.bin/<tool>` instead |
+| Users see an old error or old behaviour | Installed apps ship a frozen bundle; rebuild and redistribute |
+
+## Credits
+
+Built by **SkyMaster**, with **Claude**.

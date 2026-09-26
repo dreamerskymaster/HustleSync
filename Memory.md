@@ -67,6 +67,27 @@ orders; a blank date means the work is already done.
 `npm test` runs `tests/verify.mjs`: RLS isolation, order lifecycle, cord
 fractions and the revenue split. It is safe to run against live data.
 
+## Export
+
+CSV export from the home board (all trades) and each trade board. Pure logic in
+`src/jobMapping.js`, unit tested. Native builds share the text rather than
+downloading, because a WebView cannot trigger a file download.
+
+## Bugs that shipped, and why
+
+Worth remembering, because all three came from the same place.
+
+1. Firestore rules were never deployed, and a silent localStorage fallback
+   reported success. Every save failed invisibly.
+2. `tax_rate` received an explicit null over its default, so every save failed
+   with 23502 once the tax column existed.
+3. Ticking an order complete sent epoch milliseconds to a timestamptz column,
+   failing with 22008, because the update path did not share the insert path's
+   encoder.
+
+Two and three lived in code no test could import. That is why the pure logic now
+sits in `src/jobMapping.js` with its own suite.
+
 ## Open items
 
 - Anonymous Auth means jobs are unreachable after a reinstall or device change.
@@ -78,3 +99,9 @@ fractions and the revenue split. It is safe to run against live data.
   is ready to run; the app needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to
   cut over, and stays on Firestore until they exist.
 - `npx` hangs in this repo; call binaries in node_modules/.bin directly.
+- Installed apps ship a frozen bundle. A fix reaches web users on reload but
+  never reaches an installed app until it is rebuilt and redistributed.
+
+## Credits
+
+Built by SkyMaster, with Claude.

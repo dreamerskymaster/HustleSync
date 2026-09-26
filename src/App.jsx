@@ -9,7 +9,10 @@ import { Geolocation } from '@capacitor/geolocation';
 import { Share } from '@capacitor/share';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { createClient } from '@supabase/supabase-js';
-import { JOB_FIELDS, encodeColumn, jobToRow, rowToJob } from './jobMapping.js';
+import {
+  JOB_FIELDS, encodeColumn, jobToRow, rowToJob,
+  isOpenOrder, isUnpaid, asDate, buildCsv
+} from './jobMapping.js';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth,
@@ -33,7 +36,7 @@ import {
   User as UserIcon, MapPin, Phone, Calendar as CalendarIcon, 
   Flame, DollarSign, Layers, CheckCircle, Plus, ArrowLeft,
   Truck, Trash2, TreePine, Printer, Share2, Home, Wrench, 
-  Thermometer, Briefcase, Activity, Clock, Sun, Moon, Pencil, AlertTriangle
+  Thermometer, Briefcase, Activity, Clock, Sun, Moon, Pencil, AlertTriangle, Download
 } from 'lucide-react';
 
 // --- Supabase (Postgres) ---
@@ -266,32 +269,6 @@ const initialCompletion = (payload) => {
     : null;
   const isFuture = Boolean(scheduled) && scheduled > Date.now();
   return { completedAt: isFuture ? null : Date.now(), paidAt: null };
-};
-
-export const isOpenOrder = (job) => !job.completedAt;
-export const isUnpaid = (job) => Boolean(job.completedAt) && !job.paidAt;
-
-// Create and edit share one path. Editing never touches completedAt or paidAt,
-// so correcting an address cannot silently change where an order sits.
-// Form inputs hold strings; a saved job holds numbers and booleans. Seeding an
-// edit form means converting back, keyed off the shape of the blank form.
-const seedForm = (blank, job) => {
-  if (!job) return blank;
-  const seeded = { ...blank };
-  for (const key of Object.keys(blank)) {
-    const value = job[key];
-    if (value === undefined || value === null) continue;
-    seeded[key] = typeof blank[key] === 'boolean' ? Boolean(value) : String(value);
-  }
-  return seeded;
-};
-
-const submitJob = async (payload, userId, existingJob) => {
-  if (existingJob && existingJob.id) {
-    await updateJobFields(existingJob.id, userId, payload);
-    return { id: existingJob.id, ...payload };
-  }
-  return persistJob(payload, userId);
 };
 
 const updateJobFields = async (jobId, userId, fields, direct = false) => {
@@ -980,7 +957,10 @@ function MasterDashboard({ jobs, onNavigate, theme, onToggleTheme }) {
         </div>
       </header>
 
-      <h2 className="mb-4 font-display text-xl font-semibold tracking-wide text-graphite">Trades</h2>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="font-display text-xl font-semibold tracking-wide text-graphite">Trades</h2>
+        <ExportButton jobs={jobs} filename={`hustlesync-all-jobs-${asDate(Date.now())}.csv`} label="Export all" />
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-10">
         {businesses.map(biz => {
@@ -1041,9 +1021,19 @@ function MasterDashboard({ jobs, onNavigate, theme, onToggleTheme }) {
         )}
       </div>
 
-      <p className="mt-8 text-center text-sm text-ash">
-        {Capacitor.isNativePlatform() ? 'Installed app' : 'Running in the browser'}. Notifications: {pushStatus.toLowerCase()}.
-      </p>
+      <footer className="mt-12 border-t border-line pt-8">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <HustleSyncMark className="h-8 w-8" tile={false} />
+          <p className="font-display text-lg font-semibold tracking-wide text-ink">HustleSync</p>
+          <p className="text-sm text-ash">
+            Built by <span className="font-bold text-graphite">SkyMaster</span>, with{' '}
+            <span className="font-bold text-graphite">Claude</span>
+          </p>
+          <p className="mt-2 text-sm text-ash">
+            {Capacitor.isNativePlatform() ? 'Installed app' : 'Running in the browser'}. Notifications: {pushStatus.toLowerCase()}.
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }
@@ -1250,6 +1240,10 @@ function BusinessDashboard({ businessType, jobs, userId, onNavigate }) {
           <span>New Job</span>
         </button>
       </header>
+
+      <div className="mb-4 flex justify-end">
+        <ExportButton jobs={jobs} filename={`hustlesync-${businessType}-${asDate(Date.now())}.csv`} label={`Export ${config.title}`} />
+      </div>
 
       <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div className="rounded-2xl border border-line bg-surface p-5">
@@ -1733,6 +1727,68 @@ function JobSummaryLine({ businessType, job }) {
 // Repeat customers are the norm in this trade. The details are already in the
 // job list, so there is no reason to retype them. Jobs arrive newest first, so
 // the first match is the most recent version of their details.
+const downloadCsv = async (jobs, filename) => {
+  // Excel assumes the system encoding without a byte order mark and mangles
+  // anything non-ascii in a customer name.
+  const csv = '\uFEFF' + buildCsv(jobs);
+
+  if (Capacitor.isNativePlatform()) {
+    // A WebView cannot trigger a file download, so hand the text to the share
+    // sheet instead: mail it, save it to Files, send it to a spreadsheet app.
+    await Share.share({ title: filename, text: csv, dialogTitle: 'Export jobs as CSV' });
+    return;
+  }
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoking immediately can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+function ExportButton({ jobs, filename, label = 'Export CSV' }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  if (!jobs.length) return null;
+
+  const run = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      await downloadCsv(jobs, filename);
+    } catch (e) {
+      // Dismissing the native share sheet is not a failure.
+      if (!(e && /abort|cancel/i.test(String(e.message || e)))) {
+        console.error('CSV export failed:', e);
+        setErr('Could not export. Try again.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end">
+      <button
+        type="button"
+        onClick={run}
+        disabled={busy}
+        className="flex min-h-11 items-center gap-2 rounded-xl border border-line bg-surface px-4 text-sm font-bold text-graphite transition-colors hover:bg-paper disabled:opacity-50"
+      >
+        <Download className="h-4 w-4" />
+        <span>{busy ? 'Exporting...' : label}</span>
+      </button>
+      {err && <p className="mt-1 text-sm font-bold text-red-600">{err}</p>}
+    </div>
+  );
+}
+
 const customersFrom = (jobs = []) => {
   const seen = new Map();
   for (const job of jobs) {

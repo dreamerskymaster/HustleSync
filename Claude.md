@@ -49,7 +49,28 @@ Rules that matter:
   them, because the UI does arithmetic on those fields.
 - `status` is a generated column. Never write to it.
 
+## Where code belongs
+
+- `src/jobMapping.js` holds every pure function: field mapping, value encoding,
+  the open/unpaid predicates and CSV building. No React, no Supabase, no DOM.
+  Anything that can be tested without a browser goes here.
+- `src/App.jsx` holds components and anything touching Supabase, Capacitor or
+  the DOM.
+
+This split is not cosmetic. Two production bugs shipped from logic buried in
+App.jsx where no test could import it. If you add a pure helper, put it in
+jobMapping.js and test it.
+
 ## Things that will bite you
+
+- **One encoder for every write.** `encodeColumn` is used by both the insert and
+  the update path. They were written separately once and drifted twice: an
+  explicit null wiped tax_rate's default, then raw epoch milliseconds hit a
+  timestamptz column as 22008. Never hand-roll a second encoder.
+- **Absent is not null.** Omit a field the form never set so the column default
+  and the invoice_number trigger still run. Writing null overrides both.
+- **Surface the real error.** `describeSaveError` appends the raw code and
+  message. A generic message cost a full round trip of guessing with a user.
 
 - **Never use `npx` in this repo.** `npx firebase-tools deploy` and `npx cap sync`
   hang indefinitely at zero CPU, producing no output at all. Call the binaries
