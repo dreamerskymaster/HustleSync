@@ -11,7 +11,7 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { createClient } from '@supabase/supabase-js';
 import {
   JOB_FIELDS, encodeColumn, jobToRow, rowToJob,
-  isOpenOrder, isUnpaid, asDate, buildCsv
+  isOpenOrder, isUnpaid, asDate, buildCsv, seedForm
 } from './jobMapping.js';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -302,6 +302,17 @@ const updateJobFields = async (jobId, userId, fields, direct = false) => {
   }
   const docRef = doc(db, 'artifacts', appId, 'users', userId, 'jobs', jobId);
   await withTimeout(updateDoc(docRef, fields), 15000, 'Updating this job');
+};
+
+// Create and edit share one path. Editing never touches completedAt or paidAt,
+// so correcting an address cannot silently change where an order sits.
+// Lives here, not in jobMapping.js, because it reaches the database.
+const submitJob = async (payload, userId, existingJob) => {
+  if (existingJob && existingJob.id) {
+    await updateJobFields(existingJob.id, userId, payload);
+    return { id: existingJob.id, ...payload };
+  }
+  return persistJob(payload, userId);
 };
 
 const persistJob = async (rawPayload, userId) => {

@@ -82,11 +82,9 @@ export const rowToJob = (row) => {
 export const isOpenOrder = (job) => !job.completedAt;
 export const isUnpaid = (job) => Boolean(job.completedAt) && !job.paidAt;
 
-// Create and edit share one path. Editing never touches completedAt or paidAt,
-// so correcting an address cannot silently change where an order sits.
 // Form inputs hold strings; a saved job holds numbers and booleans. Seeding an
 // edit form means converting back, keyed off the shape of the blank form.
-const seedForm = (blank, job) => {
+export const seedForm = (blank, job) => {
   if (!job) return blank;
   const seeded = { ...blank };
   for (const key of Object.keys(blank)) {
@@ -95,14 +93,6 @@ const seedForm = (blank, job) => {
     seeded[key] = typeof blank[key] === 'boolean' ? Boolean(value) : String(value);
   }
   return seeded;
-};
-
-const submitJob = async (payload, userId, existingJob) => {
-  if (existingJob && existingJob.id) {
-    await updateJobFields(existingJob.id, userId, payload);
-    return { id: existingJob.id, ...payload };
-  }
-  return persistJob(payload, userId);
 };
 
 export const TRADE_LABELS = {
