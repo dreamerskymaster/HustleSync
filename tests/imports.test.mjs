@@ -66,5 +66,16 @@ for (const forbidden of ['supabase', 'Capacitor', 'document', 'window', 'localSt
 const main = readFileSync(new URL('../src/main.jsx', import.meta.url), 'utf8');
 ok('the app is wrapped in an error boundary', /<ErrorBoundary>/.test(main));
 
+// The integration suite runs against the live shared book, where any session
+// can delete any job. It must stay read-only. This fails the build the moment
+// a write verb appears in it.
+const verify = readFileSync(new URL('./verify.mjs', import.meta.url), 'utf8');
+for (const verb of ["method: 'DELETE'", "method: 'PATCH'", "method: 'PUT'", '.delete(', '.insert(', '.update(']) {
+  ok(`verify.mjs contains no ${verb}`, !verify.includes(verb));
+}
+const posts = (verify.match(/method: 'POST'/g) || []).length;
+ok('verify.mjs has exactly one POST, the auth signup',
+   posts === 1 && verify.includes('auth/v1/signup'), `${posts} POST(s) found`);
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

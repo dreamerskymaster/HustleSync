@@ -52,7 +52,8 @@ const fetchPostgresJobs = async (userId) => {
   const { data, error } = await supabase
     .from('jobs')
     .select('*')
-    .eq('user_id', userId)
+    // One shared book: no user filter. Row level security allows any signed-in
+    // device to read every job.
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data || []).map(rowToJob);
@@ -244,7 +245,7 @@ const flushOutbox = async (userId) => {
           await updateJobFields(change.jobId, userId, change.fields, true);
         } else if (change.type === 'delete') {
           if (!String(change.jobId).startsWith('pending-')) {
-            const { error } = await supabase.from('jobs').delete().eq('id', change.jobId).eq('user_id', userId);
+            const { error } = await supabase.from('jobs').delete().eq('id', change.jobId);
             if (error) throw error;
           }
         }
@@ -287,7 +288,7 @@ const updateJobFields = async (jobId, userId, fields, direct = false) => {
       if (key in fields) row[column] = encodeColumn(column, fields[key]);
     }
     try {
-      const { error } = await supabase.from('jobs').update(row).eq('id', jobId).eq('user_id', userId);
+      const { error } = await supabase.from('jobs').update(row).eq('id', jobId);
       if (error) throw error;
     } catch (error) {
       if (!direct && isNetworkFailure(error)) return queueIt();
@@ -365,7 +366,7 @@ const removePersistedJob = async (jobId, userId) => {
     };
     if (isOffline()) return queueIt();
     try {
-      const { error } = await supabase.from('jobs').delete().eq('id', jobId).eq('user_id', userId);
+      const { error } = await supabase.from('jobs').delete().eq('id', jobId);
       if (error) throw error;
     } catch (error) {
       if (isNetworkFailure(error)) return queueIt();
@@ -681,7 +682,8 @@ export default function HustleSyncApp() {
         .channel(`jobs-${user.uid}`)
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'jobs', filter: `user_id=eq.${user.uid}` },
+          // No filter: a job added on any device has to reach every screen.
+          { event: '*', schema: 'public', table: 'jobs' },
           () => load()
         )
         .subscribe();

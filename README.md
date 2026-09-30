@@ -57,7 +57,7 @@ cached for a year. Without the first rule Firebase defaults HTML to
 Jobs live in Supabase Postgres, one row per job in `public.jobs`.
 
 - Project `hustlesync`, ref `jsaxjeziqyptrxmvoopp`
-- Row level security restricts every user to their own rows, four policies
+- One shared book: every signed-in device reads and edits the same jobs
 - `completed_at` and `paid_at` are nullable timestamps; `status` is a generated
   column derived from `completed_at`, so it can never drift
 - Views: `job_totals_by_trade` (revenue split per trade), `open_orders`
@@ -81,13 +81,27 @@ The app picks its backend purely from environment variables. With
 them and it falls back to Firestore, which is still configured as the rollback
 path.
 
-### Known limitation
+### Sharing model, and what it costs
 
-Anonymous auth ties data to a per-device identity. Clearing site data,
-reinstalling, or switching devices makes existing jobs unreachable. They still
-exist in Postgres, and you can still query them with the CLI above, but the app
-cannot re-associate them. Email or Google sign-in is the fix before real
-customer data goes in.
+Chosen deliberately on 30 Sep 2026: one shared book with no login. Every device
+that opens the app gets an anonymous session and sees every job, from every
+device. Adding a job on a phone shows up on a laptop immediately.
+
+The cost, stated plainly: **anyone who opens the app URL can read every customer
+name, address and phone number, and can edit or delete any job.** There is no
+per-person privacy in this table and no audit trail beyond `user_id`, which
+records which device created a row.
+
+Two things still hold:
+
+- Policies apply to `authenticated` only, so the publishable key alone cannot
+  dump the table without first obtaining a session. A speed bump, not a wall.
+- Insert still requires `auth.uid() = user_id`, so nobody can forge who
+  created a job.
+
+If this ever needs to be private again, the fix is email sign-in plus either
+per-user policies (back to separate books) or a shared business id (a crew
+sharing one book, with outsiders excluded).
 
 ## Exporting
 
@@ -109,11 +123,18 @@ npm test          # unit suite, then integration suite
 mapping, timestamp encoding, numeric round trips and CSV escaping. This file
 exists because two production bugs shipped from code nothing could import.
 
-**`tests/verify.mjs`** runs against the live backend: row level security
-isolation, the order lifecycle, and cord fractions with the revenue split.
-Every row it creates belongs to throwaway anonymous users and is deleted
-afterwards. It counts pre-existing rows before and after and fails if that
-number changes, so it is safe to run against real data.
+**`tests/verify.mjs`** runs against the live backend and is **strictly
+read-only**. No insert, no update, no delete. It asserts invariants over
+whatever data is already there: that the book is shared across accounts, that
+an unauthenticated key cannot read it, that status always agrees with
+`completed_at`, that nothing is paid before it was completed, that invoice
+numbers are unique per account, and that the reporting view matches a direct
+aggregate of the rows.
+
+It is read-only on purpose. Under a shared book any session can delete any job,
+so a suite that creates and cleans up its own rows is one bug away from
+deleting real work. `tests/imports.test.mjs` fails the build if a write verb
+ever appears in it.
 
 Anonymous sign-ins are rate limited to 30/hour per IP. The suite uses two
 sessions per run, so roughly 15 runs an hour.

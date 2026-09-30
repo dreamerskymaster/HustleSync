@@ -16,6 +16,9 @@ Live backend is Supabase Postgres as of 23 Sep 2026.
 - Table `public.jobs`, 27 columns, one row per job, RLS on with four policies
 - Views: `job_totals_by_trade` (revenue split per trade), `open_orders`
 - Auth: Supabase anonymous sign-ins, enabled via `supabase config push`
+- Sharing: one shared book since 30 Sep 2026. Every device sees every job.
+  Chosen knowingly, after the privacy cost was spelled out. Anyone with the URL
+  can read and change everything.
 - The app switches backend purely on the presence of `VITE_SUPABASE_URL` and
   `VITE_SUPABASE_ANON_KEY`. Remove them and it falls back to Firestore.
 

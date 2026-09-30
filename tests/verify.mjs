@@ -1,8 +1,12 @@
-// End-to-end verification against the live Supabase backend.
+// Read-only verification against the live Supabase backend.
 //
-// Safety: every row these tests create belongs to throwaway anonymous users and
-// is removed at the end. Pre-existing rows are counted before and after and the
-// run fails if that number changes, so the suite can never eat real data.
+// This file performs NO writes. No insert, no update, no delete. Every request
+// is a GET. It asserts invariants over whatever data is already there.
+//
+// That is deliberate. The book is now shared, so any session can delete any
+// job. A suite that creates and cleans up its own rows is one bug away from
+// removing real work, so it does not create rows at all. tests/imports.test.mjs
+// fails the build if a write verb ever appears in this file.
 //
 //   node tests/verify.mjs
 
@@ -18,150 +22,117 @@ const KEY = env.VITE_SUPABASE_ANON_KEY;
 if (!URL_ || !KEY) { console.error('Missing Supabase env vars'); process.exit(1); }
 
 let pass = 0, fail = 0;
-const created = [];
 const ok = (name, cond, detail = '') => {
   if (cond) { pass++; console.log(`    PASS  ${name}`); }
   else { fail++; console.log(`    FAIL  ${name}${detail ? '  <- ' + detail : ''}`); }
 };
 
-// Anonymous sign-ins are rate limited per IP (30/hour by default), so the
-// suite creates exactly two users and reuses them rather than one per test.
 const signIn = async () => {
   const r = await fetch(`${URL_}/auth/v1/signup`, {
     method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: '{}'
   });
   const d = await r.json();
   if (d.error_code === 'over_request_rate_limit' || r.status === 429) {
-    console.error('\n  Anonymous sign-in rate limit reached (30/hour per IP).');
-    console.error('  Wait an hour, or raise auth.rate_limit.anonymous_users in supabase/config.toml.\n');
+    console.error('\n  Anonymous sign-in rate limit reached (30/hour per IP). Wait and retry.\n');
     process.exit(2);
   }
   if (!d.access_token) throw new Error('anon sign-in failed: ' + JSON.stringify(d));
   return { token: d.access_token, uid: d.user.id };
 };
 
-const rest = (path, token, init = {}) => fetch(`${URL_}/rest/v1/${path}`, {
-  ...init,
-  headers: {
-    apikey: KEY, Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json', Prefer: 'return=representation', ...(init.headers || {})
-  }
-});
-
-const insert = async (token, uid, row) => {
-  const r = await rest('jobs', token, { method: 'POST', body: JSON.stringify({ user_id: uid, ...row }) });
-  const d = await r.json();
-  if (Array.isArray(d) && d[0]) created.push({ id: d[0].id, token });
-  return { status: r.status, body: d };
+// GET only. There is no helper here capable of anything else.
+const read = async (path, token) => {
+  const r = await fetch(`${URL_}/rest/v1/${path}`, {
+    headers: { apikey: KEY, ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+  });
+  return { status: r.status, body: await r.json() };
 };
 
-const iso = (daysFromNow) => new Date(Date.now() + daysFromNow * 864e5).toISOString().slice(0, 10);
-
-// Baseline: how many rows exist before we touch anything.
 const alice = await signIn();
 const bob = await signIn();
-const wipe = async (who) => {
-  const rows = await (await rest('jobs?select=id', who.token)).json();
-  for (const r of rows) await rest(`jobs?id=eq.${r.id}`, who.token, { method: 'DELETE' });
-};
-const admin = alice;
-const baselineRes = await rest('jobs?select=id', admin.token);
-const baseline = (await baselineRes.json()).length;
-console.log(`\nBaseline: ${baseline} row(s) visible to a fresh user (RLS means real data is invisible here by design)\n`);
+const num = (v) => Number(v) || 0;
+
+const all = await read('jobs?select=id,business_type,status,total_price,wood_quantity,labor_hours,completed_at,paid_at,invoice_number,user_id', alice.token);
+const rows = Array.isArray(all.body) ? all.body : [];
+console.log(`\nRead-only run. ${rows.length} job(s) visible, ${new Set(rows.map(r => r.user_id)).size} account(s). Nothing will be written.\n`);
 
 // ---------------------------------------------------------------------------
-console.log('TEST 1  Row level security isolates every user');
+console.log('TEST 1  The book is shared, and the remaining guard holds');
 {
-  const a = alice, b = bob;
-  const mine = await insert(a.token, a.uid, {
-    business_type: 'hauling', customer_name: 'T1 Owner', customer_address: '1 Test Rd', total_price: 200
-  });
-  ok('owner can insert own row', mine.status === 201, `HTTP ${mine.status}`);
+  ok('a signed-in device can read the book', all.status === 200 && rows.length > 0, `HTTP ${all.status}`);
 
-  const aSees = await (await rest('jobs?select=customer_name', a.token)).json();
-  ok('owner reads own row', aSees.some(r => r.customer_name === 'T1 Owner'));
+  const bobSees = await read('jobs?select=id', bob.token);
+  ok('a second device sees exactly the same jobs',
+     Array.isArray(bobSees.body) && bobSees.body.length === rows.length,
+     `${Array.isArray(bobSees.body) ? bobSees.body.length : '?'} vs ${rows.length}`);
 
-  const bSees = await (await rest('jobs?select=customer_name', b.token)).json();
-  ok('other user reads nothing', Array.isArray(bSees) && bSees.length === 0, JSON.stringify(bSees).slice(0, 80));
+  ok('the book spans more than one account, so sharing is real',
+     new Set(rows.map(r => r.user_id)).size > 1,
+     'only one account present, sharing unproven');
 
-  const spoof = await insert(b.token, a.uid, {
-    business_type: 'hauling', customer_name: 'T1 Spoof', customer_address: 'x', total_price: 1
-  });
-  ok('other user cannot insert as owner', spoof.status === 403, `HTTP ${spoof.status}`);
-
-  const del = await rest(`jobs?id=eq.${mine.body[0].id}`, b.token, { method: 'DELETE' });
-  const stillThere = await (await rest('jobs?select=id', a.token)).json();
-  ok('other user cannot delete owner row', stillThere.length === 1, `deleted, HTTP ${del.status}`);
+  const anon = await read('jobs?select=id&limit=1', null);
+  ok('the publishable key alone cannot read the table',
+     anon.status !== 200 || (Array.isArray(anon.body) && anon.body.length === 0),
+     `HTTP ${anon.status} ${JSON.stringify(anon.body).slice(0, 60)}`);
 }
 
 // ---------------------------------------------------------------------------
-console.log('\nTEST 2  Order lifecycle: open, complete, paid');
+console.log('\nTEST 2  Lifecycle invariants across every real row');
 {
-  await wipe(alice);
-  const u = alice;
-  const future = await insert(u.token, u.uid, {
-    business_type: 'firewood', customer_name: 'T2 Future', customer_address: '2 Test Rd',
-    total_price: 300, wood_quantity: 1, delivery_date: iso(7)
-  });
-  ok('future dated job is open', future.body[0].status === 'open', future.body[0].status);
-  ok('open job has no completed_at', future.body[0].completed_at === null);
+  ok('status is only open or completed',
+     rows.every(r => r.status === 'open' || r.status === 'completed'),
+     [...new Set(rows.map(r => r.status))].join(', '));
 
-  const done = await insert(u.token, u.uid, {
-    business_type: 'plumbing', customer_name: 'T2 Done', customer_address: '3 Test Rd',
-    total_price: 150, completed_at: new Date().toISOString()
-  });
-  ok('same day job is completed', done.body[0].status === 'completed', done.body[0].status);
+  ok('every completed row has a completed_at',
+     rows.filter(r => r.status === 'completed').every(r => r.completed_at),
+     'a completed row is missing its timestamp');
 
-  const upd = await rest(`jobs?id=eq.${future.body[0].id}`, u.token, {
-    method: 'PATCH', body: JSON.stringify({ completed_at: new Date().toISOString() })
-  });
-  const after = (await upd.json())[0];
-  ok('ticking complete flips derived status', after.status === 'completed', after.status);
-  ok('completing does not mark it paid', after.paid_at === null);
+  ok('every open row has no completed_at',
+     rows.filter(r => r.status === 'open').every(r => !r.completed_at),
+     'an open row carries a completed timestamp');
 
-  const paid = await rest(`jobs?id=eq.${after.id}`, u.token, {
-    method: 'PATCH', body: JSON.stringify({ paid_at: new Date().toISOString() })
-  });
-  ok('paid is tracked separately', (await paid.json())[0].paid_at !== null);
+  ok('nothing is marked paid before it was completed',
+     rows.filter(r => r.paid_at).every(r => r.completed_at),
+     'a row is paid but not completed');
 
-  const bad = await rest(`jobs?id=eq.${after.id}`, u.token, {
-    method: 'PATCH', body: JSON.stringify({ status: 'open' })
-  });
-  ok('generated status cannot be written directly', bad.status >= 400, `HTTP ${bad.status}`);
+  ok('every row carries an invoice number',
+     rows.every(r => r.invoice_number !== null && r.invoice_number !== undefined));
+
+  const perUser = {};
+  for (const r of rows) (perUser[r.user_id] ||= []).push(r.invoice_number);
+  ok('invoice numbers are unique per account',
+     Object.values(perUser).every(ns => new Set(ns).size === ns.length));
 }
 
 // ---------------------------------------------------------------------------
-console.log('\nTEST 3  Cord fractions and the revenue split');
+console.log('\nTEST 3  The reporting view matches the underlying rows');
 {
-  await wipe(alice);
-  const u = alice;
-  for (const [name, cords, price] of [['T3 Half', 0.5, 150], ['T3 Quarter', 0.25, 75], ['T3 Full', 1, 300]]) {
-    await insert(u.token, u.uid, {
-      business_type: 'firewood', customer_name: name, customer_address: 'x',
-      wood_quantity: cords, total_price: price, completed_at: new Date().toISOString()
-    });
+  const view = (await read('job_totals_by_trade?select=*', alice.token)).body;
+  ok('the view is readable', Array.isArray(view) && view.length > 0);
+
+  let checked = 0;
+  for (const trade of [...new Set(rows.map(r => r.business_type))]) {
+    const own = rows.filter(r => r.business_type === trade);
+    const v = Array.isArray(view) ? view.find(x => x.business_type === trade) : null;
+    if (!v) { ok(`view has a row for ${trade}`, false); continue; }
+    const expTotal = own.filter(r => r.status === 'completed').reduce((s, r) => s + num(r.total_price), 0);
+    const expPending = own.filter(r => r.status === 'open').reduce((s, r) => s + num(r.total_price), 0);
+    const expUnpaid = own.filter(r => r.completed_at && !r.paid_at).reduce((s, r) => s + num(r.total_price), 0);
+    const expCords = own.reduce((s, r) => s + num(r.wood_quantity), 0);
+    ok(`${trade}: job count`, v.jobs === own.length, `${v.jobs} vs ${own.length}`);
+    ok(`${trade}: total revenue is completed only`, num(v.total_revenue).toFixed(2) === expTotal.toFixed(2), `${v.total_revenue} vs ${expTotal}`);
+    ok(`${trade}: pending revenue is open only`, num(v.pending_revenue).toFixed(2) === expPending.toFixed(2), `${v.pending_revenue} vs ${expPending}`);
+    ok(`${trade}: unpaid is completed and not paid`, num(v.unpaid_revenue).toFixed(2) === expUnpaid.toFixed(2), `${v.unpaid_revenue} vs ${expUnpaid}`);
+    ok(`${trade}: cords sum`, num(v.cords).toFixed(2) === expCords.toFixed(2), `${v.cords} vs ${expCords}`);
+    checked++;
   }
-  await insert(u.token, u.uid, {
-    business_type: 'firewood', customer_name: 'T3 Booked', customer_address: 'x',
-    wood_quantity: 2, total_price: 600, delivery_date: iso(10)
-  });
-
-  const v = (await (await rest('job_totals_by_trade?select=*&business_type=eq.firewood', u.token)).json())[0];
-  ok('cords total 0.5 + 0.25 + 1 + 2 = 3.75', Number(v.cords) === 3.75, `got ${v.cords}`);
-  ok('total revenue counts completed only (525)', Number(v.total_revenue) === 525, `got ${v.total_revenue}`);
-  ok('pending revenue counts open only (600)', Number(v.pending_revenue) === 600, `got ${v.pending_revenue}`);
-  ok('unpaid equals completed unpaid (525)', Number(v.unpaid_revenue) === 525, `got ${v.unpaid_revenue}`);
-  ok('open and completed counts split 1 / 3', v.open_jobs === 1 && v.completed_jobs === 3, `${v.open_jobs}/${v.completed_jobs}`);
-  ok('empty sums coalesce to 0, never null', v.pending_revenue !== null && v.total_revenue !== null);
+  ok('at least one trade was checked', checked > 0);
+  ok('sums are never null', Array.isArray(view) && view.every(v => v.total_revenue !== null && v.pending_revenue !== null));
 }
 
-// ---------------------------------------------------------------------------
-console.log('\nCleaning up rows this run created');
-await wipe(alice);
-await wipe(bob);
-const afterRes = await rest('jobs?select=id', admin.token);
-const after = (await afterRes.json()).length;
-ok(`pre-existing data untouched (${baseline} before, ${after} after)`, after === baseline);
+const stillThere = (await read('jobs?select=id', alice.token)).body;
+ok(`nothing was written or removed (${rows.length} before, ${Array.isArray(stillThere) ? stillThere.length : '?'} after)`,
+   Array.isArray(stillThere) && stillThere.length === rows.length);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

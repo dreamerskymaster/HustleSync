@@ -61,6 +61,15 @@ This split is not cosmetic. Two production bugs shipped from logic buried in
 App.jsx where no test could import it. If you add a pure helper, put it in
 jobMapping.js and test it.
 
+## The data is shared, so be careful
+
+- Every signed-in device sees and can delete every job. There is no per-user
+  scoping left. A stray bulk delete removes real work for everyone.
+- `tests/verify.mjs` is read-only and must stay that way. The boundary test
+  fails the build if a write verb appears in it.
+- Never write a query that deletes by anything other than an explicit id you
+  just created. `delete().eq('user_id', ...)` no longer protects anything.
+
 ## Things that will bite you
 
 - **One encoder for every write.** `encodeColumn` is used by both the insert and
