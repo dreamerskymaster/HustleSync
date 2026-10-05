@@ -91,6 +91,13 @@ Worth remembering, because all three came from the same place.
 Two and three lived in code no test could import. That is why the pure logic now
 sits in `src/jobMapping.js` with its own suite.
 
+## Schema drift, 5 Oct 2026
+
+supabase/schema.sql had fallen behind production: missing invoice_number and
+tax_rate, and still declaring the private per-user policies. Re-running it
+would have undone the shared book. Reconciled and verified idempotent, with
+the shared policies intact afterwards.
+
 ## Open items
 
 - Anonymous Auth means jobs are unreachable after a reinstall or device change.

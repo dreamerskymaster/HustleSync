@@ -51,7 +51,13 @@ create table if not exists public.jobs (
                      case when completed_at is null then 'open' else 'completed' end
                    ) stored,
 
-  created_at       timestamptz not null default now()
+  created_at       timestamptz not null default now(),
+
+  -- Invoicing. Numbers run per account and are assigned by the trigger below,
+  -- never by the client, because an offline phone must not invent a number
+  -- that is already taken.
+  invoice_number   integer,
+  tax_rate         numeric(6, 4) not null default 0
 );
 
 -- The app always reads one user's jobs newest first.
@@ -62,26 +68,66 @@ create index if not exists jobs_user_created_idx
 create index if not exists jobs_user_status_idx
   on public.jobs (user_id, status, created_at desc);
 
+create or replace function public.assign_invoice_number()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.invoice_number is null then
+    select coalesce(max(invoice_number), 0) + 1
+      into new.invoice_number
+      from public.jobs
+     where user_id = new.user_id;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists jobs_assign_invoice_number on public.jobs;
+create trigger jobs_assign_invoice_number
+  before insert on public.jobs
+  for each row execute function public.assign_invoice_number();
+
+create unique index if not exists jobs_user_invoice_idx
+  on public.jobs (user_id, invoice_number);
+
 -- Row level security: a signed-in user can only ever see and touch their own
 -- rows. This is the Postgres equivalent of the Firestore rules, and like those
 -- it is the only thing standing between users, so it is not optional.
 alter table public.jobs enable row level security;
 
+-- One shared book, chosen deliberately: every signed-in device reads and edits
+-- every job, with no login. The cost is that anyone who opens the app URL can
+-- read every customer name, address and phone, and can change any job.
+--
+-- Two guards remain. Policies apply to `authenticated` only, so the publishable
+-- key alone cannot dump the table without a session. Insert still requires
+-- auth.uid() = user_id, so nobody can forge who created a row.
+--
+-- To make the book private again, swap `using (true)` for
+-- `using (auth.uid() = user_id)` on select, update and delete.
+
 drop policy if exists jobs_select_own on public.jobs;
-create policy jobs_select_own on public.jobs
-  for select using (auth.uid() = user_id);
-
 drop policy if exists jobs_insert_own on public.jobs;
-create policy jobs_insert_own on public.jobs
-  for insert with check (auth.uid() = user_id);
-
 drop policy if exists jobs_update_own on public.jobs;
-create policy jobs_update_own on public.jobs
-  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
 drop policy if exists jobs_delete_own on public.jobs;
-create policy jobs_delete_own on public.jobs
-  for delete using (auth.uid() = user_id);
+
+drop policy if exists jobs_select_shared on public.jobs;
+create policy jobs_select_shared on public.jobs
+  for select to authenticated using (true);
+
+drop policy if exists jobs_insert_shared on public.jobs;
+create policy jobs_insert_shared on public.jobs
+  for insert to authenticated with check (auth.uid() = user_id);
+
+drop policy if exists jobs_update_shared on public.jobs;
+create policy jobs_update_shared on public.jobs
+  for update to authenticated using (true) with check (true);
+
+drop policy if exists jobs_delete_shared on public.jobs;
+create policy jobs_delete_shared on public.jobs
+  for delete to authenticated using (true);
 
 -- Live updates, so a job saved on the phone appears on the laptop.
 do $$
@@ -93,9 +139,9 @@ end $$;
 
 -- Convenience view for reporting. Query it in the SQL editor:
 --   select * from job_totals_by_trade;
-create or replace view public.job_totals_by_trade as
+drop view if exists public.job_totals_by_trade;
+create view public.job_totals_by_trade as
   select
-    user_id,
     business_type,
     count(*)                                                     as jobs,
     count(*) filter (where status = 'open')                      as open_jobs,
@@ -112,10 +158,11 @@ create or replace view public.job_totals_by_trade as
     min(created_at)                                              as first_job,
     max(created_at)                                              as latest_job
   from public.jobs
-  group by user_id, business_type;
+  group by business_type;
 
 -- Everything still on the books, soonest delivery first.
-create or replace view public.open_orders as
+drop view if exists public.open_orders;
+create view public.open_orders as
   select id, user_id, business_type, customer_name, customer_address,
          delivery_date, total_price, created_at
   from public.jobs

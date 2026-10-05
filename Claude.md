@@ -61,6 +61,17 @@ This split is not cosmetic. Two production bugs shipped from logic buried in
 App.jsx where no test could import it. If you add a pure helper, put it in
 jobMapping.js and test it.
 
+## Keep supabase/schema.sql honest
+
+It is the canonical definition, so it must match production. It drifted once:
+columns added by later migrations were missing, and it still declared the old
+per-user policies, so re-running it would silently have reverted the shared
+book to private. Anything applied by hand must be folded back into that file,
+and the file must re-run cleanly against a live database.
+
+A view whose columns changed needs `drop view` then `create view`.
+`create or replace view` cannot add, drop or rename a column.
+
 ## The data is shared, so be careful
 
 - Every signed-in device sees and can delete every job. There is no per-user
