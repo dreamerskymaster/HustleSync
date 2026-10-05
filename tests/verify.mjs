@@ -66,9 +66,14 @@ console.log('TEST 1  The book is shared, and the remaining guard holds');
      Array.isArray(bobSees.body) && bobSees.body.length === rows.length,
      `${Array.isArray(bobSees.body) ? bobSees.body.length : '?'} vs ${rows.length}`);
 
-  ok('the book spans more than one account, so sharing is real',
-     new Set(rows.map(r => r.user_id)).size > 1,
-     'only one account present, sharing unproven');
+  // Sharing must be proven by behaviour, not by how many accounts happen to
+  // hold data today. Bob signed in seconds ago and owns nothing, so every job
+  // he can see belongs to somebody else.
+  const bobOwns = rows.filter(r => r.user_id === bob.uid).length;
+  ok('a brand new account owns none of these jobs', bobOwns === 0, `${bobOwns} owned`);
+  ok('yet that account still sees the whole book',
+     Array.isArray(bobSees.body) && bobSees.body.length === rows.length && rows.length > 0,
+     `sees ${Array.isArray(bobSees.body) ? bobSees.body.length : '?'} of ${rows.length}`);
 
   const anon = await read('jobs?select=id&limit=1', null);
   ok('the publishable key alone cannot read the table',
